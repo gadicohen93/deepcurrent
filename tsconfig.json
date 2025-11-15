@@ -2,20 +2,32 @@
   "compilerOptions": {
     "baseUrl": ".",
     "target": "ES2022",
-    "module": "ES2022",
-    "moduleResolution": "bundler",
-    "esModuleInterop": true,
-    "forceConsistentCasingInFileNames": true,
+    "lib": ["dom", "dom.iterable", "esnext"],
+    "allowJs": true,
+    "skipLibCheck": true,
     "strict": true,
+    "noEmit": true,
+    "esModuleInterop": true,
+    "module": "esnext",
+    "moduleResolution": "bundler",
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "jsx": "preserve",
+    "incremental": true,
+    "plugins": [
+      {
+        "name": "next"
+      }
+    ],
+    "paths": {
+      "@/*": ["./src/*", "./*"]
+    },
+    "forceConsistentCasingInFileNames": true,
     "noUnusedLocals": true,
     "noUnusedParameters": true,
     "noFallthroughCasesInSwitch": true,
-    "skipLibCheck": true,
-    "noEmit": true,
-    "outDir": ".mastra",
-    "jsx": "react-jsx",
-    "paths": { "@/*": ["./src/*"] }
+    "outDir": ".mastra"
   },
-  "include": ["src/mastra/**/*", "src/app/lib/utils.ts", "src/app/components/**/*", "src/app/hooks/**/*", "src/app/api/routes/**/*", "src/pages/**/*", "src/app/**/*", "src/components/ui/**/*", "lib/**/*", "tests/**/*", "globalSetup.ts", "eslint.config.js", "prettier.config.js", "testSetup.ts", "vitest.config.ts", "vite.config.ts", "vite-env.d.ts", "src/index.js", "src/mastra/index.ts", "*./tests"],
-  "exclude": ["node_modules", ".mastra", "dist"]
+  "include": ["next-env.d.ts", "app/**/*.ts", "app/**/*.tsx", "components/**/*.ts", "components/**/*.tsx", ".next/types/**/*.ts", "src/components/ui/**/*", "src/lib/**/*", "src/hooks/**/*", "lib/**/*"],
+  "exclude": ["node_modules", ".mastra", "dist", ".next", "src/app", "src/components/GraphCanvas.tsx", "src/components/layout", "src/components/public", "src/components/ui/chart.tsx", "src/mastra", "tests", "**/*.test.ts", "**/*.test.tsx"]
 }
