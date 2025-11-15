@@ -1,0 +1,112 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 218 23% 8%;
+    --foreground: 0 0% 95%;
+    --card: 218 20% 12%;
+    --card-foreground: 0 0% 98%;
+    --popover: 218 20% 12%;
+    --popover-foreground: 0 0% 98%;
+    --primary: 250 78% 60%;
+    --primary-foreground: 0 0% 100%;
+    --secondary: 291 64% 62%;
+    --secondary-foreground: 0 0% 100%;
+    --muted: 218 15% 20%;
+    --muted-foreground: 0 0% 70%;
+    --accent: 338 78% 60%;
+    --accent-foreground: 0 0% 100%;
+    --destructive: 0 84.2% 60.2%;
+    --destructive-foreground: 0 0% 98%;
+    --border: 0 0% 100% / 0.1;
+    --input: 0 0% 100% / 0.15;
+    --ring: 250 78% 60%;
+    --radius: 1rem;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+  
+  body {
+    @apply bg-[#0a0b14] text-foreground antialiased;
+    font-family: 'Inter', sans-serif;
+    overflow-x: hidden;
+    background-image: radial-gradient(ellipse at top, rgba(79, 70, 229, 0.1) 0%, transparent 50%),
+                      radial-gradient(ellipse at bottom, rgba(236, 72, 153, 0.1) 0%, transparent 50%);
+  }
+}
+
+@layer utilities {
+  /* Gradient text */
+  .text-gradient {
+    background-image: linear-gradient(90deg, #4F46E5, #A855F7, #EC4899);
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+  }
+  
+  /* Gradient button */
+  .bg-gradient-button {
+    background-image: linear-gradient(90deg, #4F46E5, #A855F7, #EC4899);
+    transition: all 0.3s ease;
+  }
+  
+  .bg-gradient-button:hover {
+    box-shadow: 0 0 25px rgba(168, 85, 247, 0.5);
+    transform: translateY(-2px);
+  }
+  
+  /* Glassmorphism card - more opaque for readability */
+  .glass-card {
+    background: rgba(20, 18, 35, 0.7);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    transition: all 0.3s ease;
+    box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.37);
+  }
+  
+  .glass-card:hover {
+    background: rgba(25, 23, 40, 0.8);
+    border-color: rgba(168, 85, 247, 0.3);
+    transform: translateY(-2px);
+    box-shadow: 0 12px 40px 0 rgba(168, 85, 247, 0.2);
+  }
+  
+  /* Glassmorphism header */
+  .glass-header {
+    background: rgba(10, 11, 20, 0.95);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+    box-shadow: 0 4px 16px 0 rgba(0, 0, 0, 0.3);
+  }
+  
+  /* Glass input */
+  .glass-input {
+    background: rgba(20, 18, 35, 0.6);
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    color: rgba(255, 255, 255, 0.95);
+  }
+  
+  .glass-input:focus {
+    background: rgba(25, 23, 40, 0.8);
+    border-color: rgba(168, 85, 247, 0.5);
+    box-shadow: 0 0 0 3px rgba(168, 85, 247, 0.15);
+    outline: none;
+  }
+  
+  .glass-input::placeholder {
+    color: rgba(255, 255, 255, 0.4);
+  }
+}
+
