@@ -21,7 +21,12 @@
     "test:coverage:stream": "vitest run --coverage --reporter=default --reporter=json --bail=false || true",
     "test:coverage:summary": "echo '\\n📊 TEST & COVERAGE SUMMARY\\n═══════════════════════════════════════\\n' && node -e \"try { const data = JSON.parse(require('fs').readFileSync('coverage/test-results.json', 'utf8')); const passed = data.numPassedTests || 0; const failed = data.numFailedTests || 0; const total = data.numTotalTests || 0; const suites = data.numTotalTestSuites || 0; console.log('Test Suites: ' + (failed > 0 ? '\\x1b[31m' + failed + ' failed\\x1b[0m, ' : '') + '\\x1b[32m' + (suites - failed) + ' passed\\x1b[0m, ' + suites + ' total'); console.log('Tests:       ' + (failed > 0 ? '\\x1b[31m' + failed + ' failed\\x1b[0m, ' : '') + '\\x1b[32m' + passed + ' passed\\x1b[0m, ' + total + ' total'); console.log('\\n✨ Results saved to coverage/test-results.json'); } catch(e) { console.log('⚠️  No test results found. Run tests first!'); }\" || true",
     "test:coverage:force": "vitest run --coverage --passWithNoTests || true",
-    "mcp:server": "tsx src/mastra/mcp/server.ts"
+    "mcp:server": "tsx src/mastra/mcp/server.ts",
+    "db:migrate": "prisma migrate dev",
+    "db:generate": "prisma generate",
+    "db:seed": "tsx scripts/seed-db.ts",
+    "db:test": "tsx scripts/test-repositories.ts",
+    "db:studio": "prisma studio"
   },
   "keywords": [
     "mastra",
@@ -106,6 +111,7 @@
     "cmdk": "^1.1.1",
     "crawlee": "^3.15.0",
     "date-fns": "^4.1.0",
+    "dotenv": "^17.2.3",
     "embla-carousel-react": "^8.6.0",
     "exa-js": "^1.9.3",
     "input-otp": "^1.4.2",
@@ -136,6 +142,7 @@
     "zod": "^4.1.9"
   },
   "devDependencies": {
+    "@prisma/client": "^6.19.0",
     "@types/lodash": "^4.17.20",
     "@types/node": "^24.5.2",
     "@types/prop-types": "^15.7.15",
@@ -154,6 +161,7 @@
     "eslint-plugin-tsdoc": "^0.4.0",
     "mastra": "^0.13.0",
     "prettier": "^3.6.2",
+    "prisma": "^6.19.0",
     "tw-animate-css": "^1.3.8",
     "typescript": "^5.9.2",
     "vite": "^7.1.5",

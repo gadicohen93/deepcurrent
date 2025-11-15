@@ -75,7 +75,6 @@ export default [
       'eqeqeq': ['error', 'always'],
       'curly': ['error', 'all'],
       'no-multiple-empty-lines': ['error', { max: 1 }],
-      'no-trailing-spaces': 'error',
       'eol-last': 'error',
 
       // TSDoc documentation rules

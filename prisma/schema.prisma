@@ -1,0 +1,118 @@
+// This is your Prisma schema file for DeepCurrent Core Platform
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+  output   = "../node_modules/.prisma/client"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// Topic: A research "space" that ties together strategies, notes, and episodes
+model Topic {
+  id                    String   @id @default(cuid())
+  title                 String
+  description           String?
+  userId                String?
+  raindropCollectionId  String?  // Reference to Raindrop collection
+  activeStrategyVersion Int?     // Points to the current active strategy
+
+  // Relations
+  strategyConfigs       StrategyConfig[]
+  notes                 Note[]
+  episodes              Episode[]
+  evolutionLogs         StrategyEvolutionLog[]
+
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+
+  @@index([userId])
+}
+
+// StrategyConfig: Versioned agent behavior configuration
+model StrategyConfig {
+  id                String   @id @default(cuid())
+  topicId           String
+  version           Int      // Monotonic version number per topic
+  status            String   // "active" | "candidate" | "archived"
+  rolloutPercentage Int      @default(100) // For A/B testing
+  parentVersion     Int?     // For lineage tracking
+  configJson        String   // JSON blob containing StrategyConfig
+
+  // Relations
+  topic             Topic    @relation(fields: [topicId], references: [id], onDelete: Cascade)
+
+  createdAt         DateTime @default(now())
+
+  @@unique([topicId, version])
+  @@index([topicId, status])
+}
+
+// Note: User-facing research artifacts
+model Note {
+  id        String   @id @default(cuid())
+  topicId   String
+  title     String
+  content   String   // Markdown or rich text
+  type      String?  // "research" | "update" | "debug" | etc.
+
+  // Relations
+  topic     Topic    @relation(fields: [topicId], references: [id], onDelete: Cascade)
+  episodes  Episode[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([topicId])
+  @@index([createdAt])
+}
+
+// Episode: Telemetry log of a single agent run
+model Episode {
+  id                String   @id @default(cuid())
+  topicId           String
+  userId            String?
+  strategyVersion   Int
+  query             String
+
+  // Telemetry (stored as JSON)
+  sourcesReturned   String   // JSON: SourceRef[]
+  sourcesSaved      String   // JSON: SourceRef[]
+  toolUsage         String?  // JSON: tool usage logs
+
+  // Metrics
+  followupCount     Int      @default(0)
+  sensoSearchUsed   Boolean  @default(false)
+  sensoGenerateUsed Boolean  @default(false)
+
+  // Relations
+  topic             Topic    @relation(fields: [topicId], references: [id], onDelete: Cascade)
+  note              Note?    @relation(fields: [resultNoteId], references: [id], onDelete: SetNull)
+  resultNoteId      String?
+
+  createdAt         DateTime @default(now())
+
+  @@index([topicId, strategyVersion])
+  @@index([createdAt])
+}
+
+// StrategyEvolutionLog: Changelog of agent learning
+model StrategyEvolutionLog {
+  id          String   @id @default(cuid())
+  topicId     String
+  fromVersion Int?
+  toVersion   Int
+  reason      String?  // Free text explanation
+  changesJson String?  // JSON: diff of config changes
+
+  // Relations
+  topic       Topic    @relation(fields: [topicId], references: [id], onDelete: Cascade)
+
+  createdAt   DateTime @default(now())
+
+  @@index([topicId])
+  @@index([createdAt])
+}
