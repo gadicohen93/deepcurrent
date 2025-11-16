@@ -1,11 +1,60 @@
 'use client';
 
+import { useState, useEffect } from 'react';
 import Link from 'next/link';
-import { mockTopics } from '@/lib/mockData';
+import { useRouter } from 'next/navigation';
+import { fetchTopics, createTopic, type Topic } from '@/lib/api/topics';
 import { Badge } from '@/components/ui/badge';
 import { ArrowRight } from 'lucide-react';
 
 export default function TopicsPage() {
+  const router = useRouter();
+  const [topics, setTopics] = useState<Topic[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [creating, setCreating] = useState(false);
+
+  useEffect(() => {
+    async function loadTopics() {
+      try {
+        setLoading(true);
+        const data = await fetchTopics();
+        setTopics(data);
+        setError(null);
+      } catch (err) {
+        console.error('Error loading topics:', err);
+        setError('Failed to load topics');
+      } finally {
+        setLoading(false);
+      }
+    }
+
+    loadTopics();
+  }, []);
+
+  const handleCreateTopic = async () => {
+    const title = window.prompt('Enter topic title:');
+    if (!title) return;
+
+    const description = window.prompt('Enter topic description (optional):');
+
+    try {
+      setCreating(true);
+      const newTopic = await createTopic({
+        title,
+        description: description || undefined,
+      });
+
+      // Redirect to the new topic page
+      router.push(`/topics/${newTopic.id}`);
+    } catch (err) {
+      console.error('Error creating topic:', err);
+      alert('Failed to create topic. Please try again.');
+    } finally {
+      setCreating(false);
+    }
+  };
+
   return (
     <div className="min-h-screen relative">
       {/* Header */}
@@ -29,14 +78,49 @@ export default function TopicsPage() {
               <h1 className="text-3xl font-semibold text-white mb-2">Your Topics</h1>
               <p className="text-gray-400">Autonomous systems that evolve and build insight continuously</p>
             </div>
-            <button className="glass-input px-5 py-2.5 rounded-xl text-sm font-medium text-gray-300 hover:text-white hover:border-purple-500/50 transition-all flex items-center gap-2">
-              <span className="text-lg">+</span> New topic
+            <button
+              onClick={handleCreateTopic}
+              disabled={creating}
+              className="glass-input px-5 py-2.5 rounded-xl text-sm font-medium text-gray-300 hover:text-white hover:border-purple-500/50 transition-all flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              <span className="text-lg">+</span> {creating ? 'Creating...' : 'New topic'}
             </button>
           </div>
 
+          {/* Loading State */}
+          {loading && (
+            <div className="max-w-5xl mx-auto text-center py-12">
+              <div className="glass-card p-12 rounded-2xl">
+                <p className="text-gray-300">Loading topics...</p>
+              </div>
+            </div>
+          )}
+
+          {/* Error State */}
+          {error && (
+            <div className="max-w-5xl mx-auto text-center py-12">
+              <div className="glass-card p-12 rounded-2xl border-red-500/30">
+                <p className="text-red-300">{error}</p>
+              </div>
+            </div>
+          )}
+
+          {/* Empty State */}
+          {!loading && !error && topics.length === 0 && (
+            <div className="max-w-5xl mx-auto text-center py-12">
+              <div className="glass-card p-12 rounded-2xl">
+                <p className="text-gray-300 text-lg mb-2">No topics yet</p>
+                <p className="text-gray-500 text-sm">
+                  Create your first topic to start building autonomous research agents
+                </p>
+              </div>
+            </div>
+          )}
+
           {/* Topics Grid */}
-          <div className="max-w-5xl mx-auto space-y-4">
-            {mockTopics.map((topic) => {
+          {!loading && !error && topics.length > 0 && (
+            <div className="max-w-5xl mx-auto space-y-4">
+              {topics.map((topic) => {
               const activeStrategy = topic.strategies.find(
                 (s) => s.version === topic.activeStrategyVersion
               );
@@ -95,7 +179,8 @@ export default function TopicsPage() {
                 </Link>
               );
             })}
-          </div>
+            </div>
+          )}
         </div>
       </main>
     </div>

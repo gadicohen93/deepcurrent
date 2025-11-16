@@ -1,11 +1,13 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useParams } from 'next/navigation';
-import { getTopicById, Note } from '@/lib/mockData';
+import { fetchTopicWithRelations, type Topic, type Note } from '@/lib/api/topics';
 import { NoteCard } from '@/components/topic/NoteCard';
+import { StreamingNoteCard } from '@/components/topic/StreamingNoteCard';
 import { QueryInput } from '@/components/topic/QueryInput';
 import { AgentBrainPanel } from '@/components/agent/AgentBrainPanel';
+import { useStreamingResearch } from '@/hooks/useStreamingResearch';
 import { Switch } from '@/components/ui/switch';
 import { Label } from '@/components/ui/label';
 import { Badge } from '@/components/ui/badge';
@@ -15,57 +17,73 @@ import Link from 'next/link';
 export default function TopicWorkspacePage() {
   const params = useParams();
   const topicId = params.id as string;
-  const topic = getTopicById(topicId);
 
-  const [notes, setNotes] = useState<Note[]>(topic?.notes || []);
-  const [watchEnabled, setWatchEnabled] = useState(topic?.watchEnabled || false);
-  const [isQuerying, setIsQuerying] = useState(false);
+  const [topic, setTopic] = useState<Topic | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [notes, setNotes] = useState<Note[]>([]);
+  const [watchEnabled, setWatchEnabled] = useState(false);
 
-  if (!topic) {
+  const { streamingState, startStreaming, isStreaming } = useStreamingResearch(topicId);
+  const [currentQuery, setCurrentQuery] = useState('');
+
+  // Load topic
+  useEffect(() => {
+    async function loadTopic() {
+      try {
+        setLoading(true);
+        const data = await fetchTopicWithRelations(topicId);
+        setTopic(data);
+        setNotes(data.notes);
+        setWatchEnabled(data.watchEnabled);
+        setError(null);
+      } catch (err) {
+        console.error('Error loading topic:', err);
+        setError('Failed to load topic');
+      } finally {
+        setLoading(false);
+      }
+    }
+
+    loadTopic();
+  }, [topicId]);
+
+  // Refetch notes when streaming completes
+  useEffect(() => {
+    if (streamingState.status === 'completed' && streamingState.noteId) {
+      // Refetch topic to get the new note
+      fetchTopicWithRelations(topicId).then((data) => {
+        setNotes(data.notes);
+      });
+    }
+  }, [streamingState.status, streamingState.noteId, topicId]);
+
+  if (loading) {
     return (
       <div className="min-h-screen flex items-center justify-center">
-        <p className="text-muted-foreground">Topic not found</p>
+        <div className="glass-card p-12 rounded-2xl">
+          <p className="text-gray-300">Loading topic...</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (error || !topic) {
+    return (
+      <div className="min-h-screen flex items-center justify-center">
+        <div className="glass-card p-12 rounded-2xl border-red-500/30">
+          <p className="text-red-300">{error || 'Topic not found'}</p>
+          <Link href="/topics" className="text-purple-400 hover:text-purple-300 mt-4 inline-block">
+            ← Back to topics
+          </Link>
+        </div>
       </div>
     );
   }
 
   const handleQuery = async (query: string) => {
-    setIsQuerying(true);
-
-    // Simulate processing delay
-    await new Promise((resolve) => setTimeout(resolve, 1500));
-
-    // Create a new mock note
-    const newNote: Note = {
-      id: `n${Date.now()}`,
-      topicId: topic.id,
-      title: `Answer: ${query.substring(0, 60)}${query.length > 60 ? '...' : ''}`,
-      content: `# Research Results
-
-Your query: "${query}"
-
-This is a mock response. In a real implementation, this would contain:
-
-- Relevant research findings from configured tools
-- Synthesized information from multiple sources
-- Citations and references
-- Key insights and recommendations
-
-The current active strategy (v${topic.activeStrategyVersion}) would determine:
-- Which tools to use (${topic.strategies.find((s) => s.version === topic.activeStrategyVersion)?.tools.join(', ')})
-- Search depth and time window
-- Summary format and style
-
-**Next Steps:**
-- Review the findings
-- Ask follow-up questions
-- Save relevant insights`,
-      type: 'research',
-      createdAt: new Date().toISOString(),
-    };
-
-    setNotes([newNote, ...notes]);
-    setIsQuerying(false);
+    setCurrentQuery(query);
+    await startStreaming(query);
   };
 
   return (
@@ -119,7 +137,7 @@ The current active strategy (v${topic.activeStrategyVersion}) would determine:
         <div className="container mx-auto max-w-7xl px-6 py-6">
           <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
             <div className="lg:col-span-7">
-              <QueryInput onSubmit={handleQuery} isLoading={isQuerying} />
+              <QueryInput onSubmit={handleQuery} isLoading={isStreaming} />
             </div>
           </div>
         </div>
@@ -130,8 +148,13 @@ The current active strategy (v${topic.activeStrategyVersion}) would determine:
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
           {/* Center Column - Research Stream */}
           <div className="lg:col-span-7 space-y-4">
-            {/* Notes List */}
-            {notes.length === 0 ? (
+            {/* Streaming Note (if active) */}
+            {isStreaming && currentQuery && (
+              <StreamingNoteCard query={currentQuery} state={streamingState} />
+            )}
+
+            {/* Regular Notes */}
+            {notes.length === 0 && !isStreaming ? (
               <div className="glass-card p-12 text-center rounded-2xl">
                 <p className="text-gray-300 text-lg mb-2">No research yet</p>
                 <p className="text-gray-500 text-sm">

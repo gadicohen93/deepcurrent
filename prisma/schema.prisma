@@ -78,6 +78,10 @@ model Episode {
   strategyVersion   Int
   query             String
 
+  // Status tracking for streaming
+  status            String   @default("pending")  // "pending" | "running" | "completed" | "failed"
+  errorMessage      String?
+
   // Telemetry (stored as JSON)
   sourcesReturned   String   // JSON: SourceRef[]
   sourcesSaved      String   // JSON: SourceRef[]
