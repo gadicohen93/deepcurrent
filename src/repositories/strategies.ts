@@ -1,46 +1,20 @@
 /**
- * Strategy Configurations Repository
+ * Strategy Config Repository
  *
- * Data access layer for StrategyConfig entities.
- * Handles versioned agent behavior configurations.
+ * Data access layer for StrategyConfig entities
  */
 
 import { prisma } from './db';
-import type { StrategyConfig, CreateStrategyConfigInput, StrategyConfigPayload } from './types';
+import type { StrategyConfig, CreateStrategyConfigInput } from './types';
 
 /**
- * Get active strategy for a topic
+ * Get all strategies for a topic
  */
-export async function getActiveStrategy(topicId: string): Promise<StrategyConfig | null> {
-  const topic = await prisma.topic.findUnique({
-    where: { id: topicId },
+export async function getStrategiesForTopic(topicId: string): Promise<StrategyConfig[]> {
+  return prisma.strategyConfig.findMany({
+    where: { topicId },
+    orderBy: { version: 'desc' },
   });
-
-  if (!topic?.activeStrategyVersion) {
-    return null;
-  }
-
-  return prisma.strategyConfig.findFirst({
-    where: {
-      topicId,
-      version: topic.activeStrategyVersion,
-    },
-  });
-}
-
-/**
- * Get active strategy with parsed config
- */
-export async function getActiveStrategyWithConfig(
-  topicId: string
-): Promise<(StrategyConfig & { config: StrategyConfigPayload }) | null> {
-  const strategy = await getActiveStrategy(topicId);
-  if (!strategy) return null;
-
-  return {
-    ...strategy,
-    config: JSON.parse(strategy.configJson) as StrategyConfigPayload,
-  };
 }
 
 /**
@@ -61,35 +35,40 @@ export async function getStrategyByVersion(
 }
 
 /**
- * Get all strategies for a topic
+ * Get the active strategy for a topic
  */
-export async function getAllStrategiesForTopic(topicId: string): Promise<StrategyConfig[]> {
-  return prisma.strategyConfig.findMany({
-    where: { topicId },
+export async function getActiveStrategy(topicId: string): Promise<StrategyConfig | null> {
+  const strategies = await prisma.strategyConfig.findMany({
+    where: {
+      topicId,
+      status: 'active',
+    },
     orderBy: { version: 'desc' },
+    take: 1,
   });
+
+  return strategies[0] || null;
 }
 
 /**
  * Create a new strategy version
+ * @param input - Strategy configuration input
  */
 export async function createStrategyVersion(
   input: CreateStrategyConfigInput
 ): Promise<StrategyConfig> {
-  // Get the max version for this topic
-  const maxVersionResult = await prisma.strategyConfig.aggregate({
-    where: { topicId: input.topicId },
-    _max: { version: true },
-  });
-
-  const newVersion = (maxVersionResult._max.version ?? -1) + 1;
+  // Get the next version number
+  const existingStrategies = await getStrategiesForTopic(input.topicId);
+  const nextVersion = existingStrategies.length > 0
+    ? Math.max(...existingStrategies.map((s) => s.version)) + 1
+    : 1;
 
   return prisma.strategyConfig.create({
     data: {
       topicId: input.topicId,
-      version: newVersion,
-      status: input.status ?? 'candidate',
-      rolloutPercentage: input.rolloutPercentage ?? 20,
+      version: nextVersion,
+      status: input.status ?? 'active',
+      rolloutPercentage: input.rolloutPercentage ?? 100,
       parentVersion: input.parentVersion,
       configJson: JSON.stringify(input.config),
     },
@@ -97,46 +76,79 @@ export async function createStrategyVersion(
 }
 
 /**
- * Set a strategy version as active
- * This will:
- * 1. Archive all current strategies for the topic
- * 2. Set the specified version to active with 100% rollout
- * 3. Update the topic's activeStrategyVersion
+ * Create default strategy for a new topic
+ * @param topicId - The topic ID to create strategy for
+ */
+export async function createDefaultStrategy(topicId: string): Promise<StrategyConfig> {
+  const defaultConfig = {
+    // Core tools
+    tools: ['linkupSearchTool', 'evaluateResultsBatchTool', 'extractLearningsTool'],
+    
+    // Search behavior
+    searchDepth: 'standard',
+    timeWindow: 'week',
+    maxFollowups: undefined,
+    
+    // Tool preferences
+    sensoFirst: false,
+    skipEvaluation: false,  // New: Skip evaluation for speed
+    
+    // Output formatting
+    summaryTemplates: ['bullets', 'narrative'],
+    
+    // Execution control (NEW - Top priority parameters!)
+    model: 'gpt-4o-mini',           // 1. Model selection
+    parallelSearches: false,         // 2. Parallel vs sequential
+    enabledTools: ['linkup', 'evaluate', 'extract'],  // 3. Tool selection
+  };
+
+  return createStrategyVersion({
+    topicId,
+    status: 'active',
+    rolloutPercentage: 100,
+    config: defaultConfig as any,
+  });
+}
+
+/**
+ * Set a strategy as active (and deactivate others)
  */
 export async function setActiveStrategy(
   topicId: string,
   version: number
 ): Promise<StrategyConfig> {
-  // Use a transaction to ensure consistency
-  return prisma.$transaction(async (tx) => {
-    // Update topic's active version
-    await tx.topic.update({
-      where: { id: topicId },
-      data: { activeStrategyVersion: version },
-    });
-
-    // Archive all other strategies
-    await tx.strategyConfig.updateMany({
-      where: { topicId },
-      data: { status: 'archived' },
-    });
-
-    // Set the target strategy to active
-    const activeStrategy = await tx.strategyConfig.update({
-      where: {
-        topicId_version: {
-          topicId,
-          version,
-        },
-      },
-      data: {
-        status: 'active',
-        rolloutPercentage: 100,
-      },
-    });
-
-    return activeStrategy;
+  // Deactivate all current active strategies
+  await prisma.strategyConfig.updateMany({
+    where: {
+      topicId,
+      status: 'active',
+    },
+    data: {
+      status: 'archived',
+    },
   });
+
+  // Activate the specified version
+  const strategy = await prisma.strategyConfig.update({
+    where: {
+      topicId_version: {
+        topicId,
+        version,
+      },
+    },
+    data: {
+      status: 'active',
+      rolloutPercentage: 100,
+    },
+  });
+
+  // Update the topic's activeStrategyVersion
+  await prisma.topic.update({
+    where: { id: topicId },
+    data: { activeStrategyVersion: version },
+  });
+
+  return strategy;
 }
 
 /**
@@ -154,21 +166,19 @@ export async function updateStrategyRollout(
         version,
       },
     },
-    data: { rolloutPercentage },
+    data: {
+      rolloutPercentage,
+    },
   });
-}
-
-/**
- * Promote a candidate strategy to active
- */
-export async function promoteStrategy(topicId: string, version: number): Promise<StrategyConfig> {
-  return setActiveStrategy(topicId, version);
 }
 
 /**
  * Archive a strategy version
  */
-export async function archiveStrategy(topicId: string, version: number): Promise<StrategyConfig> {
+export async function archiveStrategy(
+  topicId: string,
+  version: number
+): Promise<StrategyConfig> {
   return prisma.strategyConfig.update({
     where: {
       topicId_version: {
@@ -176,19 +186,8 @@ export async function archiveStrategy(topicId: string, version: number): Promise
         version,
       },
     },
-    data: { status: 'archived' },
-  });
-}
-
-/**
- * Get candidate strategies for a topic
- */
-export async function getCandidateStrategies(topicId: string): Promise<StrategyConfig[]> {
-  return prisma.strategyConfig.findMany({
-    where: {
-      topicId,
-      status: 'candidate',
+    data: {
+      status: 'archived',
     },
-    orderBy: { version: 'desc' },
   });
 }

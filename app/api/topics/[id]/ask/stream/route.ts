@@ -3,6 +3,7 @@
  * 
  * POST /api/topics/[id]/ask/stream
  * Starts a research episode and streams progress updates in real-time
+ * Uses self-evolving workflow for integrated strategy evolution
  */
 
 import { NextRequest } from 'next/server';
@@ -38,11 +39,25 @@ export async function POST(
       );
     }
 
+    // Ensure topic has a strategy - create if missing
+    if (!topic.activeStrategyVersion) {
+      const { createDefaultStrategy } = await import('@/repositories/strategies');
+      const { prisma } = await import('@/repositories/db');
+      
+      const strategy = await createDefaultStrategy(topicId);
+      await prisma.topic.update({
+        where: { id: topicId },
+        data: { activeStrategyVersion: strategy.version },
+      });
+      
+      topic.activeStrategyVersion = strategy.version;
+    }
+
     // Create episode
     const episode = await createEpisode({
       topicId,
       query,
-      strategyVersion: topic.activeStrategyVersion || 0,
+      strategyVersion: topic.activeStrategyVersion,
       sourcesReturned: [],
       sourcesSaved: [],
     });
@@ -57,7 +72,8 @@ export async function POST(
             encoder.encode(`data: ${JSON.stringify({ type: 'episode_created', episodeId: episode.id })}\n\n`)
           );
 
-          // Stream research progress
+          // Stream research progress with full tool visibility
+          // Evolution happens in background and is detected via polling
           for await (const event of runResearchStreaming(episode.id)) {
             controller.enqueue(
               encoder.encode(`data: ${JSON.stringify(event)}\n\n`)

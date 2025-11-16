@@ -1,6 +1,7 @@
 import { Mastra } from '@mastra/core';
 import { LibSQLStore } from '@mastra/libsql';
 import { researchWorkflow } from './workflows/researchWorkflow';
+import { selfEvolvingResearchWorkflow } from './workflows/selfEvolvingResearchWorkflow';
 import { learningExtractionAgent } from './agents/learningExtractionAgent';
 import { evaluationAgent } from './agents/evaluationAgent';
 import { reportAgent } from './agents/reportAgent';
@@ -48,20 +49,27 @@ export const mastra = new Mastra({
      evaluationAgent,
      learningExtractionAgent,
      webSummarizationAgent,
-     ragAgent,
-     githubAgent,
-     monitorAgent,
-     planningAgent,
-     qualityAssuranceAgent,
-     publisherAgent,
-     copywriterAgent,
-     editorAgent,
-     assistant,
+    //  ragAgent,
+    //  githubAgent,
+    //  monitorAgent,
+    //  planningAgent,
+    //  qualityAssuranceAgent,
+    //  publisherAgent,
+    //  copywriterAgent,
+    //  editorAgent,
+    //  assistant,
    },
-   workflows: { generateReportWorkflow, researchWorkflow, comprehensiveResearchWorkflow, githubPlanningWorkflow, githubQualityWorkflow },
-   vnext_networks: {
-     complexResearchNetwork,
-   },
+   workflows: { 
+    // generateReportWorkflow, 
+    researchWorkflow,
+    selfEvolvingResearchWorkflow,
+    // comprehensiveResearchWorkflow, 
+    // githubPlanningWorkflow, 
+    // githubQualityWorkflow 
+  },
+  //  vnext_networks: {
+  //    complexResearchNetwork,
+  //  },
    telemetry: { enabled: false },
    observability: {
     default: { enabled: true }, // Enables DefaultExporter and CloudExporter

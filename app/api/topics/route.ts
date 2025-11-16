@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { listTopics, createTopic } from '@/repositories/topics';
+import { createDefaultStrategy } from '@/repositories/strategies';
 import type { CreateTopicInput } from '@/repositories/types';
 
 /**
@@ -46,6 +47,10 @@ export async function POST(request: NextRequest) {
     };
 
     const topic = await createTopic(input);
+    
+    // Create a default strategy for the new topic
+    await createDefaultStrategy(topic.id);
+    
     return NextResponse.json(topic, { status: 201 });
   } catch (error) {
     console.error('Error creating topic:', error);

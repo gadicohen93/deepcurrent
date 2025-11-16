@@ -15,11 +15,18 @@ export const linkupSearchTool = createTool({
   inputSchema: z.object({
     query: z.string().describe('The search query to run'),
   }),
-  execute: async ({ context, mastra }) => {
+  execute: async ({ context, mastra, runtimeContext }) => {
     // Let Mastra automatically manage spans - don't create or end spans manually
     // Mastra's framework will handle span lifecycle automatically
     logger.info('Executing LinkUp search tool');
     const { query } = context;
+
+    // Access runtime strategy configuration
+    const strategy = runtimeContext as { searchDepth?: string; timeWindow?: string } | undefined;
+    const searchDepth = strategy?.searchDepth ?? 'standard';
+    const timeWindow = strategy?.timeWindow ?? 'week';
+
+    logger.info('Strategy-aware search:', { searchDepth, timeWindow, query });
 
     try {
       const apiKey = process.env.LINKUP_API_KEY;
@@ -33,15 +40,19 @@ export const linkupSearchTool = createTool({
         apiKey: apiKey ?? '',
       });
 
-      logger.info(`Searching web with LinkUp for: "${query}"`);
+      // Adapt search parameters based on strategy
+      const depth = searchDepth === 'deep' ? 'deep' : 'standard';
+      const resultCount = searchDepth === 'deep' ? 5 : searchDepth === 'shallow' ? 2 : 3;
+
+      logger.info(`Searching web with LinkUp (${depth} mode) for: "${query}"`);
 
       const data = await linkup.search({
         query,
-        depth: 'standard', // Use standard for faster results
+        depth,
         outputType: 'searchResults',
       });
 
-      const results = (data.results ?? []).slice(0, 3);
+      const results = (data.results ?? []).slice(0, resultCount);
 
       if (!Array.isArray(results) || results.length === 0) {
         logger.info('No search results found');
@@ -79,6 +90,10 @@ export const linkupSearchTool = createTool({
         try {
           const content = result.content ?? '';
 
+          // Adapt summarization based on search depth
+          const maxChars = searchDepth === 'shallow' ? 4000 : 8000;
+          const summaryStyle = searchDepth === 'shallow' ? 'brief' : 'concise';
+
           // Use generateVNext() for V2 models (gemini-2.5-flash-lite) as per Mastra issue #7042
           const summaryResponse = await summaryAgent.generateVNext([
             {
@@ -87,9 +102,9 @@ export const linkupSearchTool = createTool({
 
 Title: ${result.name ?? 'No title'}
 URL: ${result.url}
-Content: ${content.substring(0, 8000)}...
+Content: ${content.substring(0, maxChars)}...
 
-Provide a concise summary that captures the key information relevant to the research query.`,
+Provide a ${summaryStyle} summary that captures the key information relevant to the research query.`,
             },
           ]);
 
@@ -122,9 +137,13 @@ Provide a concise summary that captures the key information relevant to the rese
       // Combine all results
       processedResults.push(...summarizedResults);
 
-      logger.info('Processed results:', processedResults);
+      logger.info(`Processed ${processedResults.length} results using ${searchDepth} strategy`);
       return {
         results: processedResults,
+        strategyApplied: {
+          searchDepth,
+          resultCount,
+        },
       };
     } catch (error) {
       logger.error('Error searching the web with LinkUp', { error });

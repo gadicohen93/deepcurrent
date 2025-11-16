@@ -16,6 +16,9 @@ export function useStreamingResearch(topicId: string) {
     progress: { current: 0, total: 0 },
     partialContent: '',
     toolCalls: [],
+    searchResults: [],
+    evaluations: [],
+    learnings: [],
   });
 
   const abortControllerRef = useRef<AbortController | null>(null);
@@ -28,6 +31,9 @@ export function useStreamingResearch(topicId: string) {
       progress: { current: 0, total: 0 },
       partialContent: '',
       toolCalls: [],
+      searchResults: [],
+      evaluations: [],
+      learnings: [],
     });
 
     // Create new abort controller for this request
@@ -155,6 +161,45 @@ export function useStreamingResearch(topicId: string) {
           ...prev,
           status: 'error',
           error: event.error,
+        }));
+        break;
+
+      case 'search_results':
+        setStreamingState((prev) => ({
+          ...prev,
+          searchResults: [...(prev.searchResults || []), event],
+        }));
+        break;
+
+      case 'evaluation_results':
+        setStreamingState((prev) => ({
+          ...prev,
+          evaluations: [...(prev.evaluations || []), event],
+        }));
+        break;
+
+      case 'learning_extracted':
+        setStreamingState((prev) => ({
+          ...prev,
+          learnings: [...(prev.learnings || []), event],
+        }));
+        break;
+
+      case 'progress':
+        setStreamingState((prev) => ({
+          ...prev,
+          progress: { current: event.step, total: event.total },
+        }));
+        break;
+
+      case 'strategy_evolved':
+        setStreamingState((prev) => ({
+          ...prev,
+          strategyEvolution: {
+            fromVersion: event.fromVersion,
+            toVersion: event.toVersion,
+            reason: event.reason,
+          },
         }));
         break;
     }

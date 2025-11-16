@@ -2,34 +2,23 @@ import { evaluate } from '@mastra/core/eval';
 import { registerHook, AvailableHooks } from '@mastra/core/hooks';
 import { TABLE_EVALS } from '@mastra/core/storage';
 import { generateEmptyFromSchema, checkEvalStorageFields } from '@mastra/core/utils';
-import { Agent as Agent$1, Mastra } from '@mastra/core';
-import { LIBSQL_PROMPT, LibSQLStore } from '@mastra/libsql';
+import { Mastra } from '@mastra/core';
+import { LibSQLStore } from '@mastra/libsql';
 import { createWorkflow, createStep } from '@mastra/core/workflows';
 import { z, ZodFirstPartyTypeKind, ZodObject } from 'zod';
 import { PinoLogger } from '@mastra/loggers';
+import { getActiveStrategy } from '@/repositories/strategies';
+import { analyzeEpisodePerformance, shouldEvolveStrategy, evolveStrategy } from '@/lib/strategyEvolution';
+import { updateEpisodeStatus } from '@/repositories/episodes';
+import { createNote } from '@/repositories/notes';
 import { Agent, MessageList } from '@mastra/core/agent';
 import { google as google$2 } from '@ai-sdk/google';
-import { b as createResearchMemory, S as STORAGE_CONFIG } from './libsql-storage.mjs';
+import { b as createResearchMemory } from './libsql-storage.mjs';
 import { ToneConsistencyMetric, KeywordCoverageMetric, TextualDifferenceMetric, CompletenessMetric, ContentSimilarityMetric } from '@mastra/evals/nlp';
 import { openai as openai$2 } from '@ai-sdk/openai';
-import { evaluateResultsBatchTool } from './tools/58aaf6a2-cb3d-4aa1-9572-53732e55f577.mjs';
-import { extractLearningsTool } from './tools/1165bfd1-9c7b-42ef-8917-882cd16200f0.mjs';
-import { linkupSearchTool } from './tools/a4643453-6263-4d3c-b28c-b6dffae7cc11.mjs';
-import { listDataDirTool, deleteDataFileTool, writeDataFileTool, readDataFileTool, getDataFileInfoTool, searchDataFilesTool } from './tools/56571028-eaf8-4ad1-8bc5-48a4dc644699.mjs';
-import { evaluateResultTool } from './tools/254da4c4-d323-478f-9aea-52b30e911f03.mjs';
-import { graphRAGQueryTool, graphRAGTool, graphRAGUpsertTool } from './tools/4be32ffe-7425-4938-81b3-95c2fcf46608.mjs';
-import { weatherTool } from './tools/d8ee9c8f-9400-431e-80cf-d60863ba1005.mjs';
-import { webScraperTool, contentCleanerTool, htmlToMarkdownTool, linkExtractorTool, siteMapExtractorTool, batchWebScraperTool } from './tools/b708f59f-1a64-4e89-9723-1b9c826d3615.mjs';
-import { webSearchTool } from './tools/78de0394-dfca-4836-8911-134e426a218e.mjs';
-import { createGeminiProvider } from 'ai-sdk-provider-gemini-cli';
-import { NewAgentNetwork } from '@mastra/core/network/vNext';
-import { createOpenRouter } from '@openrouter/ai-sdk-provider';
-import { BatchPartsProcessor, UnicodeNormalizer } from '@mastra/core/processors';
-import { searchUsers, searchRepositories, searchIssuesAndPullRequests, searchCode } from './tools/8bf71eac-7a9b-4be1-8223-6c2de48922bf.mjs';
-import { createPullRequestReview, listPullRequestReviews, deletePullRequestComment, updatePullRequestComment, createPullRequestComment, listPullRequestComments, mergePullRequest, updatePullRequest, createPullRequest, getPullRequest, listPullRequests } from './tools/ed6b7b5a-7e31-41e8-96c3-5c1dcfb81d1f.mjs';
-import { copywriterTool } from './tools/282e46cb-a3f7-4d70-8090-23d21bbec80e.mjs';
-import { editorTool } from './tools/d1ab9676-2995-4ab0-b7b1-61859edca85d.mjs';
-import { createVectorQueryTool } from '@mastra/rag';
+import { evaluateResultsBatchTool } from './tools/30e10093-1693-474a-a7e3-d14decc9aab3.mjs';
+import { extractLearningsTool } from './tools/1d6a39e5-5d80-4cc3-84c6-a71f2b4295d2.mjs';
+import { linkupSearchTool } from './tools/d9a9bfe0-c7ef-4ee2-a65a-080c0cd7081b.mjs';
 import crypto$1, { randomUUID } from 'crypto';
 import { readdir, readFile, mkdtemp, rm, writeFile, mkdir, copyFile, stat } from 'fs/promises';
 import * as https from 'https';
@@ -60,18 +49,6 @@ import { tools } from './tools.mjs';
 import '@mastra/memory';
 import 'ai';
 import 'linkup-sdk';
-import 'node:path';
-import 'zlib';
-import 'stream/promises';
-import './tools/198919ae-b89c-4279-88f7-48786d78e48b.mjs';
-import 'cheerio';
-import 'crawlee';
-import 'marked';
-import 'node:fs/promises';
-import 'jsdom';
-import 'exa-js';
-import './tools/bc40bc69-d533-4f35-b0af-e6e721b9b160.mjs';
-import '@octokit/rest';
 
 
 // -- Shims --
@@ -81,8 +58,8 @@ import cjsModule from 'node:module';
 const __filename = cjsUrl.fileURLToPath(import.meta.url);
 const __dirname = cjsPath.dirname(__filename);
 const require = cjsModule.createRequire(import.meta.url);
-const logger$l = new PinoLogger({ level: "info" });
-const getUserQueryStep$1 = createStep({
+const logger$7 = new PinoLogger({ level: "info" });
+const getUserQueryStep = createStep({
   id: "get-user-query",
   inputSchema: z.object({}),
   outputSchema: z.object({
@@ -173,7 +150,7 @@ const researchStep = createStep({
       };
     } catch (error) {
       const err = error instanceof Error ? error : new Error(String(error));
-      logger$l.error("Error in researchStep", { error: err.message, stack: err.stack });
+      logger$7.error("Error in researchStep", { error: err.message, stack: err.stack });
       return {
         researchData: { error: err.message },
         summary: `Error: ${err.message}`
@@ -218,13 +195,173 @@ const researchWorkflow = createWorkflow({
     approved: z.boolean(),
     researchData: z.any()
   }),
-  steps: [getUserQueryStep$1, researchStep, approvalStep]
+  steps: [getUserQueryStep, researchStep, approvalStep]
 });
-researchWorkflow.then(getUserQueryStep$1).then(researchStep).then(approvalStep).commit();
+researchWorkflow.then(getUserQueryStep).then(researchStep).then(approvalStep).commit();
 
-const logger$k = new PinoLogger({ level: "info" });
-logger$k.info("Initializing Learning Extraction Agent...");
-const memory$c = createResearchMemory();
+const loadStrategyStep = createStep({
+  id: "load-strategy",
+  description: "Load active strategy configuration for the topic",
+  inputSchema: z.object({
+    topicId: z.string(),
+    episodeId: z.string(),
+    query: z.string()
+  }),
+  execute: async ({ context: { inputData } }) => {
+    const strategy = await getActiveStrategy(inputData.topicId);
+    if (!strategy) {
+      return {
+        ...inputData,
+        strategyVersion: 1,
+        config: {
+          searchDepth: "standard",
+          timeWindow: "week",
+          summaryTemplates: ["bullets"],
+          sensoFirst: false
+        }
+      };
+    }
+    const config = JSON.parse(strategy.configJson);
+    return {
+      ...inputData,
+      strategyVersion: strategy.version,
+      config
+    };
+  }
+});
+const executeResearchStep = createStep({
+  id: "execute-research",
+  description: "Execute research using the loaded strategy",
+  inputSchema: z.object({
+    topicId: z.string(),
+    episodeId: z.string(),
+    query: z.string(),
+    strategyVersion: z.number(),
+    config: z.any()
+  }),
+  execute: async ({ context: { inputData }, mastra }) => {
+    await updateEpisodeStatus(inputData.episodeId, "running");
+    const researchAgent = mastra.getAgent("researchAgent");
+    const searchInstructions = inputData.config.searchDepth === "deep" ? "Conduct thorough, deep research with multiple follow-up queries (up to 5)." : inputData.config.searchDepth === "shallow" ? "Conduct quick, focused research with minimal follow-ups (1-2 max)." : "Conduct focused research with targeted follow-up queries (2-3).";
+    const result = await researchAgent.generate(
+      [
+        {
+          role: "user",
+          content: `Research the following topic: "${inputData.query}"
+
+**Research Strategy Configuration (v${inputData.strategyVersion}):**
+- Search Depth: ${inputData.config.searchDepth}
+- Time Window: ${inputData.config.timeWindow}
+- ${searchInstructions}
+${inputData.config.maxFollowups ? `- Maximum follow-up queries: ${inputData.config.maxFollowups}` : ""}
+
+Provide a comprehensive summary with:
+1. Key findings
+2. Important insights
+3. Relevant sources (with URLs)
+
+Format your response in clear, readable markdown.`
+        }
+      ],
+      {
+        runtimeContext: {
+          strategyVersion: inputData.strategyVersion,
+          ...inputData.config,
+          topicId: inputData.topicId,
+          episodeId: inputData.episodeId
+        }
+      }
+    );
+    const note = await createNote({
+      topicId: inputData.topicId,
+      title: `Research: ${inputData.query.substring(0, 60)}${inputData.query.length > 60 ? "..." : ""}`,
+      content: result.text,
+      type: "research"
+    });
+    await updateEpisodeStatus(inputData.episodeId, "completed", {
+      resultNoteId: note.id,
+      sourcesReturned: [],
+      sourcesSaved: []
+    });
+    return {
+      ...inputData,
+      result: result.text,
+      noteId: note.id
+    };
+  }
+});
+const analyzePerformanceStep = createStep({
+  id: "analyze-performance",
+  description: "Analyze the episode performance and determine if evolution is needed",
+  inputSchema: z.object({
+    episodeId: z.string(),
+    topicId: z.string(),
+    strategyVersion: z.number()
+  }),
+  execute: async ({ context: { inputData } }) => {
+    const analysis = await analyzeEpisodePerformance(inputData.episodeId);
+    const evolution = await shouldEvolveStrategy(
+      inputData.topicId,
+      inputData.strategyVersion,
+      5
+      // Minimum episodes before evolution
+    );
+    return {
+      analysis,
+      shouldEvolve: evolution.shouldEvolve,
+      evolutionReason: evolution.reason,
+      metrics: evolution.metrics
+    };
+  }
+});
+const evolveStrategyStep = createStep({
+  id: "evolve-strategy",
+  description: "Create a new evolved strategy version",
+  inputSchema: z.object({
+    topicId: z.string(),
+    strategyVersion: z.number(),
+    evolutionReason: z.string(),
+    metrics: z.any()
+  }),
+  execute: async ({ context: { inputData } }) => {
+    const { newStrategy, evolutionLog } = await evolveStrategy(
+      inputData.topicId,
+      inputData.strategyVersion,
+      {
+        reason: inputData.evolutionReason,
+        metrics: inputData.metrics
+      }
+    );
+    return {
+      newStrategyVersion: newStrategy.version,
+      evolutionLogId: evolutionLog.id,
+      reason: evolutionLog.reason
+    };
+  }
+});
+const selfEvolvingResearchWorkflow = createWorkflow({
+  name: "self-evolving-research",
+  triggerSchema: z.object({
+    topicId: z.string(),
+    episodeId: z.string(),
+    query: z.string()
+  })
+}).then(loadStrategyStep).then(executeResearchStep).then(analyzePerformanceStep).branch([
+  // If should evolve, create new strategy
+  [
+    async ({ event }) => {
+      const analyzeResult = event.payload;
+      return analyzeResult.shouldEvolve === true;
+    },
+    async ({ workflow }) => {
+      return workflow.then(evolveStrategyStep).commit();
+    }
+  ]
+]).commit();
+
+const logger$6 = new PinoLogger({ level: "info" });
+logger$6.info("Initializing Learning Extraction Agent...");
+const memory$3 = createResearchMemory();
 const learningExtractionAgent = new Agent({
   id: "learning-agent",
   name: "Learning Extraction Agent",
@@ -252,11 +389,11 @@ const learningExtractionAgent = new Agent({
     toneConsistency: new ToneConsistencyMetric()
   },
   model: google$2("gemini-2.5-flash-lite"),
-  memory: memory$c
+  memory: memory$3
 });
 
-const logger$j = new PinoLogger({ level: "info" });
-logger$j.info("Initializing Evaluation Agent...");
+const logger$5 = new PinoLogger({ level: "info" });
+logger$5.info("Initializing Evaluation Agent...");
 const evaluationAgent = new Agent({
   id: "evaluation-agent",
   name: "Evaluation Agent",
@@ -295,9 +432,9 @@ const evaluationAgent = new Agent({
   }
 });
 
-const logger$i = new PinoLogger({ level: "info" });
-logger$i.info("Initializing Report Agent...");
-const memory$b = createResearchMemory();
+const logger$4 = new PinoLogger({ level: "info" });
+logger$4.info("Initializing Report Agent...");
+const memory$2 = createResearchMemory();
 const reportAgent = new Agent({
   id: "report-agent",
   name: "Report Agent",
@@ -333,51 +470,62 @@ const reportAgent = new Agent({
     toneConsistency: new ToneConsistencyMetric()
   },
   model: google$2("gemini-2.5-flash"),
-  memory: memory$b
+  memory: memory$2
 });
 
-const logger$h = new PinoLogger({ level: "info" });
-logger$h.info("Initializing Research Agent...");
-const memory$a = createResearchMemory();
+const logger$3 = new PinoLogger({ level: "info" });
+logger$3.info("Initializing Research Agent...");
+const memory$1 = createResearchMemory();
 const researchAgent = new Agent({
   id: "research-agent",
   name: "Research Agent",
   description: "An expert research agent that conducts thorough research using web search and analysis tools.",
-  instructions: `You are an expert research agent. Your goal is to research topics thoroughly by following this EXACT process:
+  instructions: `You are an expert research agent. Your goal is to research topics thoroughly using a STRATEGY-DRIVEN approach.
+
+  **IMPORTANT: You receive a runtime strategy configuration that controls your behavior:**
+  - searchDepth: 'shallow' (quick), 'standard' (balanced), or 'deep' (thorough)
+  - maxFollowups: Maximum number of follow-up queries to make
+  - timeWindow: Preferred recency of sources
+  - Adapt your research process based on these settings!
 
   **PHASE 1: Initial Research**
-  1. Break down the main topic into 2 specific, focused search queries
+  1. Break down the main topic into 2-3 specific, focused search queries
   2. For each query, use the linkupSearchTool to search the web
   3. Use evaluateResultsBatchTool to evaluate ALL results from a search query at once (this is much faster than evaluating one by one)
   4. For relevant results, use extractLearningsTool to extract key learnings and follow-up questions
 
   **PHASE 2: Follow-up Research**
-  1. After completing Phase 1, collect ALL follow-up questions from the extracted learnings
-  2. Search for each follow-up question using linkupSearchTool
-  3. Use evaluateResultsBatchTool to evaluate ALL results from each follow-up search at once, then use extractLearningsTool on relevant results
-  4. **STOP after Phase 2 - do NOT search additional follow-up questions from Phase 2 results**
+  1. After completing Phase 1, collect follow-up questions from the extracted learnings
+  2. **Respect maxFollowups limit from runtime config** - limit the number of follow-up queries
+  3. For each follow-up, use linkupSearchTool then evaluateResultsBatchTool then extractLearningsTool
+  4. **STOP after Phase 2** - do NOT search additional follow-up questions from Phase 2 results
 
   **Important Guidelines:**
   - Keep search queries focused and specific - avoid overly general queries
   - Track all completed queries to avoid repetition
   - Only search follow-up questions from the FIRST round of learnings
-  - Do NOT create infinite loops by searching follow-up questions from follow-up results
-  - **ALWAYS use evaluateResultsBatchTool instead of evaluateResultTool** - pass all results from a search query at once for parallel evaluation (much faster!)
+  - **Respect strategy limits** - if maxFollowups=2, only do 2 follow-ups total
+  - **ALWAYS use evaluateResultsBatchTool** - pass all results at once for parallel evaluation
 
   **Output Structure:**
-  Return findings in JSON format with:
-  - queries: Array of all search queries used (initial + follow-up)
-  - searchResults: Array of relevant search results found
-  - learnings: Array of key learnings extracted from results
+  Return findings with:
+  - queries: Array of all search queries used
+  - searchResults: Array of relevant results
+  - learnings: Array of key learnings
   - completedQueries: Array tracking what has been searched
-  - phase: Current phase of research ("initial" or "follow-up")
-  - runtimeConfig: Applied runtime configuration settings
+  - phase: Current phase
+  - **strategyUsed**: Confirm which strategy settings were applied
 
   **Error Handling:**
-  - If all searches fail, use your knowledge to provide basic information
-  - Always complete the research process even if some searches fail
+  - If searches fail, use your knowledge to provide basic information
+  - Always complete the research process
 
-  Use all the tools available to you systematically and stop after the follow-up phase.
+  **Your performance is being monitored:**
+  - High save rate = good quality sources
+  - Reasonable follow-up count = efficient research
+  - If performance is poor, the strategy will automatically evolve to improve!
+
+  Use all tools systematically and follow the strategy configuration.
   `,
   evals: {
     contentSimilarity: new ContentSimilarityMetric({ ignoreCase: true, ignoreWhitespace: true }),
@@ -394,12 +542,12 @@ const researchAgent = new Agent({
     // evaluateResultTool, // Keep for backward compatibility, but prefer evaluateResultsBatchTool
     extractLearningsTool
   },
-  memory: memory$a
+  memory: memory$1
 });
 
-const logger$g = new PinoLogger({ level: "info" });
-logger$g.info("Initializing Web Summarization Agent...");
-const memory$9 = createResearchMemory();
+const logger$2 = new PinoLogger({ level: "info" });
+logger$2.info("Initializing Web Summarization Agent...");
+const memory = createResearchMemory();
 const webSummarizationAgent = new Agent({
   id: "web-summarization-agent",
   name: "Web Content Summarization Agent",
@@ -488,1444 +636,6 @@ Always provide summaries that capture the core value of the web content without 
     toneConsistency: new ToneConsistencyMetric()
   },
   model: openai$2("gpt-4o-mini"),
-  memory: memory$9
-});
-
-const logger$f = new PinoLogger({ level: "info" });
-const processResearchResultStep = createStep({
-  id: "process-research-result",
-  inputSchema: z.object({
-    approved: z.boolean(),
-    researchData: z.any()
-  }),
-  outputSchema: z.object({
-    report: z.string().optional(),
-    completed: z.boolean()
-  }),
-  execute: async ({ inputData, mastra }) => {
-    const approved = inputData.approved && inputData.researchData !== void 0 && inputData.researchData !== null;
-    if (!approved) {
-      logger$f.info("Research not approved or incomplete, ending workflow");
-      return { completed: false };
-    }
-    try {
-      logger$f.info("Generating report...");
-      const agent = mastra.getAgent("reportAgent");
-      const response = await agent.generate([
-        {
-          role: "user",
-          content: `Generate a report based on this research: ${JSON.stringify(inputData.researchData)}`
-        }
-      ]);
-      logger$f.info("Report generated successfully!");
-      return { report: response.text, completed: true };
-    } catch (error) {
-      logger$f.error("Error generating report", { error });
-      return { completed: false };
-    }
-  }
-});
-const generateReportWorkflow = createWorkflow({
-  id: "generate-report-workflow",
-  steps: [researchWorkflow, processResearchResultStep],
-  inputSchema: z.object({}),
-  outputSchema: z.object({
-    report: z.string().optional(),
-    completed: z.boolean()
-  })
-});
-generateReportWorkflow.dowhile(researchWorkflow, async ({ inputData }) => {
-  const isCompleted = inputData.approved;
-  return !isCompleted;
-}).then(processResearchResultStep).commit();
-
-const logger$e = new PinoLogger({ level: "info" });
-logger$e.info("Initializing RAG Agent...");
-const memory$8 = createResearchMemory();
-const gemini = createGeminiProvider({
-  authType: "oauth-personal",
-  cacheDir: "~/.gemini/oauth_creds.json"
-  // Directory to store cached tokens
-});
-const ragAgent = new Agent({
-  id: "rag-agent",
-  name: "RAG Agent",
-  description: "An advanced RAG (Retrieval-Augmented Generation) Expert Agent for knowledge navigation and synthesis.",
-  instructions: `You are an advanced RAG (Retrieval-Augmented Generation) Expert Agent, designed to serve as a comprehensive knowledge navigator and synthesizer. Your primary purpose is to assist users in efficiently accessing, understanding, and synthesizing information from a vast, dynamic knowledge base. Your core responsibility is to provide accurate, evidence-based, and well-structured answers by intelligently combining your inherent knowledge with information retrieved from external sources. You act as a trusted information specialist for users seeking detailed and reliable insights. Your capabilities include:
-
-CORE CAPABILITIES:
-1.  **Information Retrieval (Vector Search):** Utilize the 'vectorQueryTool' to perform highly relevant semantic searches across the stored knowledge base, identifying and extracting pertinent documents or data chunks.
-2.  **Document Management (Processing & Indexing):** Employ the 'chunkerTool' to process new documents, breaking them down into manageable, searchable units and integrating them into the vector store for future retrieval.
-3.  **Knowledge Synthesis & Reasoning:** Analyze retrieved information, identify key insights, resolve potential conflicts, and integrate this data with your foundational knowledge to construct coherent, comprehensive, and insightful responses.
-4.  **Query Clarification:** Proactively engage with users to clarify ambiguous or underspecified queries, ensuring the retrieval and synthesis process is precisely aligned with their needs.
-5.  **Source Attribution:** Accurately cite all retrieved sources to maintain transparency and allow users to verify information.
-
-BEHAVIORAL GUIDELINES:
-*   **Communication Style:** Maintain a professional, clear, and informative tone. Responses should be easy to understand, well-organized, and directly address the user's query.
-*   **Decision-Making Framework:** Always prioritize retrieving information via 'vectorQueryTool' before formulating an answer. If direct retrieval is insufficient, leverage your internal knowledge to bridge gaps, clearly distinguishing between retrieved and generated content. If new documents are provided, use 'chunkerTool' to process them before attempting retrieval.
-*   **Error Handling:** If a search yields no relevant results, clearly state this limitation and suggest alternative approaches or acknowledge the gap in the knowledge base. If a query is unanswerable, explain why.
-*   **Transparency:** Explicitly state when information is directly retrieved from the knowledge base versus when it is synthesized or inferred from your general training data. Always provide citations for retrieved information.
-*   **Proactive Engagement:** If a query is vague or could benefit from additional context, ask clarifying questions to refine the search and improve the quality of the response.
-
-CONSTRAINTS & BOUNDARIES:
-*   **Tool Usage:** You are strictly limited to using 'vectorQueryTool' for information retrieval and 'chunkerTool' for document processing. Do not attempt to access external websites or databases directly.
-*   **Scope:** Your primary function is information retrieval and synthesis from the provided knowledge base. Do not engage in creative writing, personal opinions, or tasks unrelated to information provision.
-*   **Data Privacy:** Handle all information with the utmost confidentiality. Do not store personal user data or share sensitive information beyond the scope of the current interaction.
-*   **Ethical Conduct:** Ensure all responses are unbiased, factual, and avoid generating harmful, discriminatory, or misleading content.
-
-SUCCESS CRITERIA:
-*   **Accuracy:** Responses must be factually correct and well-supported by evidence from the knowledge base.
-*   **Relevance:** Retrieved and synthesized information must directly address the user's query.
-*   **Completeness:** Provide comprehensive answers that cover all aspects of the query, acknowledging any limitations or gaps.
-*   **Clarity & Structure:** Responses are well-organized, easy to read, and include clear headings, bullet points, and source citations where appropriate.
-*   **Efficiency:** Deliver timely and concise responses without unnecessary verbosity.
-*   **User Satisfaction:** The ultimate measure of success is the user's ability to gain valuable insights and have their information needs met effectively.
-
-Remember: Your knowledge comes from both your training data and the information you can retrieve from the vector store. Always leverage both for comprehensive answers, prioritizing retrieved information.
-${LIBSQL_PROMPT}
-`,
-  evals: {
-    contentSimilarity: new ContentSimilarityMetric({ ignoreCase: true, ignoreWhitespace: true }),
-    completeness: new CompletenessMetric(),
-    textualDifference: new TextualDifferenceMetric(),
-    keywordCoverage: new KeywordCoverageMetric(),
-    // Keywords will be provided at runtime for evaluation
-    toneConsistency: new ToneConsistencyMetric()
-  },
-  model: gemini("gemini-2.5-flash"),
-  tools: {
-    //    vectorQueryTool,
-    //    chunkerTool,
-    batchWebScraperTool,
-    siteMapExtractorTool,
-    linkExtractorTool,
-    htmlToMarkdownTool,
-    contentCleanerTool,
-    readDataFileTool,
-    writeDataFileTool,
-    deleteDataFileTool,
-    listDataDirTool,
-    evaluateResultTool,
-    extractLearningsTool,
-    graphRAGUpsertTool,
-    graphRAGTool,
-    graphRAGQueryTool,
-    //    rerankTool,
-    weatherTool,
-    webScraperTool,
-    webSearchTool
-  },
-  memory: memory$8
-});
-
-const logger$d = new PinoLogger({ level: "info" });
-const getUserQueryStep = createStep({
-  id: "get-user-query",
-  inputSchema: z.object({}),
-  outputSchema: z.object({
-    query: z.string()
-  }),
-  resumeSchema: z.object({
-    query: z.string()
-  }),
-  suspendSchema: z.object({
-    message: z.object({
-      query: z.string()
-    })
-  }),
-  execute: async ({ resumeData, suspend }) => {
-    if (resumeData) {
-      return {
-        ...resumeData,
-        query: resumeData.query || ""
-      };
-    }
-    await suspend({
-      message: {
-        query: "What would you like to research?"
-      }
-    });
-    return {
-      query: ""
-    };
-  }
-});
-const conductWebResearchStep = createStep({
-  id: "conduct-web-research",
-  inputSchema: z.object({
-    query: z.string()
-  }),
-  outputSchema: z.object({
-    searchResults: z.array(z.object({
-      title: z.string(),
-      url: z.string(),
-      content: z.string()
-    })),
-    learnings: z.array(z.object({
-      learning: z.string(),
-      followUpQuestions: z.array(z.string()),
-      source: z.string()
-    })),
-    completedQueries: z.array(z.string())
-  }),
-  execute: async ({ inputData }) => {
-    const { query } = inputData;
-    logger$d.info(`Starting web research for query: ${query}`);
-    try {
-      const result = await researchAgent.generateVNext(
-        [
-          {
-            role: "user",
-            content: `Research the following topic thoroughly using the two-phase process: "${query}".
-            Phase 1: Search for 2-3 initial queries about this topic
-            Phase 2: Search for follow-up questions from the learnings (then STOP)
-            Return findings in JSON format with queries, searchResults, learnings, completedQueries, and phase.`
-          }
-        ],
-        {
-          output: z.object({
-            queries: z.array(z.string()),
-            searchResults: z.array(
-              z.object({
-                title: z.string(),
-                url: z.string(),
-                relevance: z.string().optional(),
-                content: z.string()
-              })
-            ),
-            learnings: z.array(
-              z.object({
-                learning: z.string(),
-                followUpQuestions: z.array(z.string()),
-                source: z.string()
-              })
-            ),
-            completedQueries: z.array(z.string()),
-            phase: z.string().optional()
-          })
-        }
-      );
-      if (!result.object) {
-        logger$d.warn(`researchAgent.generate did not return an object for query: ${query}`);
-        return {
-          searchResults: [],
-          learnings: [],
-          completedQueries: []
-        };
-      }
-      logger$d.info(`Web research completed for query: ${query}`);
-      return {
-        searchResults: result.object.searchResults,
-        learnings: result.object.learnings,
-        completedQueries: result.object.completedQueries
-      };
-    } catch (error) {
-      const errMsg = error instanceof Error ? error.message : String(error);
-      const errStack = error instanceof Error && error.stack !== null ? error.stack : void 0;
-      logger$d.error("Error in conductWebResearchStep", { error: errMsg, stack: errStack });
-      return {
-        searchResults: [],
-        learnings: [],
-        completedQueries: []
-      };
-    }
-  }
-});
-const evaluateAndExtractStep = createStep({
-  id: "evaluate-and-extract",
-  inputSchema: z.object({
-    query: z.string(),
-    searchResult: z.object({
-      title: z.string(),
-      url: z.string(),
-      content: z.string()
-    })
-  }),
-  outputSchema: z.object({
-    isRelevant: z.boolean(),
-    reason: z.string(),
-    learning: z.string().optional(),
-    followUpQuestions: z.array(z.string()).optional(),
-    processedUrl: z.string()
-  }),
-  execute: async ({ inputData }) => {
-    const { query, searchResult } = inputData;
-    logger$d.info(`Evaluating and extracting from search result: ${searchResult.url}`);
-    try {
-      const evaluationResult = await evaluationAgent.generateVNext(
-        [
-          {
-            role: "user",
-            content: `Evaluate whether this search result is relevant to the query: "${query}".
-            Search result: Title: ${searchResult.title}, URL: ${searchResult.url}, Content snippet: ${searchResult.content.substring(0, 500)}...
-            Respond with JSON { isRelevant: boolean, reason: string }`
-          }
-        ],
-        {
-          output: z.object({
-            isRelevant: z.boolean(),
-            reason: z.string()
-          })
-        }
-      );
-      if (!evaluationResult.object) {
-        logger$d.warn(`evaluationAgent.generate did not return an object for search result: ${searchResult.url}`);
-        return {
-          isRelevant: false,
-          reason: "Evaluation agent did not return a valid object.",
-          processedUrl: searchResult.url
-        };
-      }
-      if (!evaluationResult.object.isRelevant) {
-        logger$d.info(`Search result not relevant: ${searchResult.url}`);
-        return {
-          isRelevant: false,
-          reason: evaluationResult.object.reason,
-          processedUrl: searchResult.url
-        };
-      }
-      const extractionResult = await learningExtractionAgent.generateVNext(
-        [
-          {
-            role: "user",
-            content: `The user is researching "${query}". Extract a key learning and generate up to 1 follow-up question from this search result:
-            Title: ${searchResult.title}, URL: ${searchResult.url}, Content: ${searchResult.content.substring(0, 1500)}...
-            Respond with JSON { learning: string, followUpQuestions: string[] }`
-          }
-        ],
-        {
-          output: z.object({
-            learning: z.string(),
-            followUpQuestions: z.array(z.string()).max(1)
-          })
-        }
-      );
-      if (!extractionResult.object) {
-        logger$d.warn(`learningExtractionAgent.generate did not return an object for search result: ${searchResult.url}`);
-        return {
-          isRelevant: true,
-          reason: "Extraction agent did not return a valid object.",
-          learning: void 0,
-          followUpQuestions: void 0,
-          processedUrl: searchResult.url
-        };
-      }
-      logger$d.info(`Extracted learning from: ${searchResult.url}`);
-      return {
-        isRelevant: true,
-        reason: evaluationResult.object.reason,
-        learning: extractionResult.object.learning,
-        followUpQuestions: extractionResult.object.followUpQuestions,
-        processedUrl: searchResult.url
-      };
-    } catch (error) {
-      const errMsg = error instanceof Error ? error.message : String(error);
-      const errStack = error instanceof Error && error.stack !== null ? error.stack : void 0;
-      logger$d.error("Error in evaluateAndExtractStep", { error: errMsg, stack: errStack });
-      return {
-        isRelevant: false,
-        reason: `Error during evaluation or extraction: ${errMsg}`,
-        processedUrl: searchResult.url
-      };
-    }
-  }
-});
-const consolidateResearchDataStep = createStep({
-  id: "consolidate-research-data",
-  inputSchema: z.object({
-    allLearnings: z.array(z.object({
-      learning: z.string(),
-      followUpQuestions: z.array(z.string()),
-      source: z.string()
-    })),
-    allRelevantContent: z.array(z.object({
-      title: z.string(),
-      url: z.string(),
-      content: z.string()
-    })),
-    originalQuery: z.string()
-  }),
-  outputSchema: z.object({
-    consolidatedText: z.string(),
-    allFollowUpQuestions: z.array(z.string()),
-    originalQuery: z.string()
-  }),
-  execute: async ({ inputData }) => {
-    const { allLearnings, allRelevantContent, originalQuery } = inputData;
-    logger$d.info("Consolidating research data.");
-    const combinedLearnings = allLearnings.map((l) => l.learning).join("\n\n");
-    const combinedContent = allRelevantContent.map((c) => `Title: ${c.title}
-URL: ${c.url}
-Content: ${c.content}`).join("\n\n---\n\n");
-    const allFollowUpQuestions = allLearnings.flatMap((l) => l.followUpQuestions);
-    const consolidatedText = `Original Query: ${originalQuery}
-
-Learnings:
-${combinedLearnings}
-
-Relevant Content:
-${combinedContent}`;
-    logger$d.info("Research data consolidated.");
-    return {
-      consolidatedText,
-      allFollowUpQuestions,
-      originalQuery
-    };
-  }
-});
-const processAndRetrieveStep = createStep({
-  id: "process-and-retrieve",
-  inputSchema: z.object({
-    consolidatedText: z.string(),
-    originalQuery: z.string()
-  }),
-  outputSchema: z.object({
-    refinedContext: z.string()
-  }),
-  execute: async ({ inputData, runtimeContext, tracingContext }) => {
-    const { consolidatedText, originalQuery } = inputData;
-    logger$d.info("Starting RAG processing and retrieval.");
-    try {
-      const chunkingResult = await ragAgent.tools.graphRAGUpsertTool.execute({
-        input: {
-          document: {
-            text: consolidatedText,
-            type: "text",
-            metadata: {}
-          },
-          indexName: "comprehensive_research_data",
-          createIndex: true,
-          vectorProfile: "libsql"
-        },
-        context: {
-          document: {
-            text: "",
-            type: "text",
-            metadata: {}
-          },
-          indexName: "",
-          createIndex: false,
-          vectorProfile: "libsql"
-        },
-        runtimeContext,
-        tracingContext
-      });
-      logger$d.info(`Chunked and upserted ${chunkingResult.chunkIds.length} chunks to comprehensive_research_data index.`);
-      const rerankedResults = await ragAgent.tools.graphRAGQueryTool.execute({
-        input: {
-          query: originalQuery,
-          topK: 10,
-          threshold: 0.5,
-          indexName: "comprehensive_research_data",
-          vectorProfile: "libsql",
-          includeVector: false,
-          minScore: 0
-        },
-        context: {
-          query: "",
-          topK: 0,
-          threshold: 0,
-          indexName: "",
-          vectorProfile: "libsql",
-          includeVector: false,
-          minScore: 0
-        },
-        runtimeContext,
-        tracingContext
-      });
-      const refinedContext = rerankedResults.sources.map((s) => s.content).join("\n\n");
-      logger$d.info("RAG processing and retrieval complete.");
-      return {
-        refinedContext
-      };
-    } catch (error) {
-      const errMsg = error instanceof Error ? error.message : String(error);
-      const errStack = error instanceof Error && error.stack !== null ? error.stack : void 0;
-      logger$d.error("Error in processAndRetrieveStep:", { error: errMsg, stack: errStack });
-      return {
-        refinedContext: `Error during RAG processing: ${errMsg}`
-      };
-    }
-  }
-});
-const synthesizeFinalContentStep = createStep({
-  id: "synthesize-final-content",
-  inputSchema: z.object({
-    refinedContext: z.string(),
-    originalQuery: z.string()
-  }),
-  outputSchema: z.object({
-    finalSynthesizedContent: z.string()
-  }),
-  execute: async ({ inputData }) => {
-    const { refinedContext, originalQuery } = inputData;
-    logger$d.info("Synthesizing final content.");
-    try {
-      const summaryResponse = await webSummarizationAgent.generate([
-        {
-          role: "user",
-          content: `Synthesize the following refined context into a comprehensive and coherent summary, directly addressing the original query: "${originalQuery}".
-          Refined Context: ${refinedContext}`
-        }
-      ]);
-      logger$d.info("Final content synthesized.");
-      return {
-        finalSynthesizedContent: summaryResponse.text
-      };
-    } catch (error) {
-      const errMsg = error instanceof Error ? error.message : String(error);
-      const errStack = error instanceof Error && error.stack !== null ? error.stack : void 0;
-      logger$d.error("Error in synthesizeFinalContentStep:", { error: errMsg, stack: errStack });
-      return {
-        finalSynthesizedContent: `Error during content synthesis: ${errMsg}`
-      };
-    }
-  }
-});
-const generateFinalReportStep = createStep({
-  id: "generate-final-report",
-  inputSchema: z.object({
-    finalSynthesizedContent: z.string(),
-    originalQuery: z.string()
-  }),
-  outputSchema: z.object({
-    report: z.string()
-  }),
-  execute: async ({ inputData }) => {
-    const { finalSynthesizedContent, originalQuery } = inputData;
-    logger$d.info("Generating final report.");
-    try {
-      const report = await reportAgent.generate([
-        {
-          role: "user",
-          content: `Generate a comprehensive report based on the following synthesized content, addressing the original research query: "${originalQuery}".
-          Content: ${finalSynthesizedContent}`
-        }
-      ]);
-      logger$d.info("Final report generated.");
-      return { report: report.text };
-    } catch (error) {
-      const errMsg = error instanceof Error ? error.message : String(error);
-      return { report: `Error generating report: ${errMsg}` };
-    }
-  }
-});
-const reportApprovalStep = createStep({
-  id: "report-approval",
-  inputSchema: z.object({
-    report: z.string()
-  }),
-  outputSchema: z.object({
-    approved: z.boolean(),
-    finalReport: z.string()
-  }),
-  resumeSchema: z.object({
-    approved: z.boolean()
-  }),
-  suspendSchema: z.object({
-    message: z.string(),
-    reportPreview: z.string()
-  }),
-  execute: async ({ inputData, resumeData, suspend }) => {
-    const { report } = inputData;
-    const { approved } = resumeData ?? {};
-    if (approved === void 0) {
-      logger$d.info("Suspending for report approval.");
-      await suspend({
-        message: "Review the generated report. Do you approve it? (true/false)",
-        reportPreview: report.substring(0, 1e3) + "..."
-      });
-      return { approved: false, finalReport: report };
-    }
-    logger$d.info(`Report approval received: ${approved}`);
-    return {
-      approved,
-      finalReport: report
-    };
-  }
-});
-let _currentIterationCount;
-const iterativeResearchLoopWorkflow = createWorkflow({
-  id: "iterative-research-loop",
-  inputSchema: z.object({
-    query: z.string(),
-    iterationCount: z.number().optional(),
-    allLearnings: z.array(z.any()).optional(),
-    allRelevantContent: z.array(z.any()).optional(),
-    currentFollowUpQuestions: z.array(z.string()).optional()
-  }),
-  outputSchema: z.object({
-    allLearnings: z.array(z.any()),
-    allRelevantContent: z.array(z.any()),
-    newFollowUpQuestions: z.array(z.string()),
-    iterationCount: z.number()
-  }),
-  steps: [conductWebResearchStep, evaluateAndExtractStep]
-}).map(async ({ inputData }) => {
-  const { query, iterationCount = 0, allLearnings = [], allRelevantContent = [], currentFollowUpQuestions = [] } = inputData;
-  const newIterationCount = iterationCount + 1;
-  _currentIterationCount = newIterationCount;
-  const researchQuery = newIterationCount > 1 && currentFollowUpQuestions.length > 0 ? currentFollowUpQuestions.join(" OR ") : query;
-  logger$d.info(`Starting iterative research iteration ${newIterationCount} with query: ${researchQuery}`);
-  return {
-    query: researchQuery,
-    allLearnings,
-    allRelevantContent,
-    iterationCount: newIterationCount,
-    currentFollowUpQuestions
-  };
-}).then(conductWebResearchStep).map(async ({ inputData }) => {
-  return inputData.searchResults;
-}).foreach(evaluateAndExtractStep, { concurrency: 1 }).map(async ({ getStepResult }) => {
-  const iterationLearnings = getStepResult(conductWebResearchStep).learnings;
-  const iterationSearchResults = getStepResult(conductWebResearchStep).searchResults;
-  const _rawEvaluateResults = getStepResult(evaluateAndExtractStep);
-  const evaluateResults = Array.isArray(_rawEvaluateResults) ? _rawEvaluateResults : [_rawEvaluateResults];
-  const relevantLearnings = [];
-  const relevantContent = [];
-  const newFollowUpQuestions = [];
-  for (const evalResult of evaluateResults) {
-    const processedUrl = typeof evalResult.processedUrl === "string" ? evalResult.processedUrl.trim() : "";
-    if (evalResult.isRelevant && processedUrl !== "") {
-      const originalSearchResult = iterationSearchResults.find((sr) => sr.url === processedUrl);
-      const hasValidTitle = typeof originalSearchResult?.title === "string" && originalSearchResult.title.trim() !== "";
-      const hasValidUrl = typeof originalSearchResult?.url === "string" && originalSearchResult.url.trim() !== "";
-      const hasValidContent = typeof originalSearchResult?.content === "string" && originalSearchResult.content.trim() !== "";
-      if (hasValidTitle && hasValidUrl && hasValidContent) {
-        const sr = originalSearchResult;
-        relevantContent.push({
-          title: sr.title,
-          url: sr.url,
-          content: sr.content
-        });
-      }
-      const originalLearning = iterationLearnings.find((l) => l.source === processedUrl);
-      if (originalLearning) {
-        relevantLearnings.push(originalLearning);
-        newFollowUpQuestions.push(...originalLearning.followUpQuestions ?? []);
-      }
-    }
-  }
-  return {
-    allLearnings: relevantLearnings,
-    allRelevantContent: relevantContent,
-    newFollowUpQuestions,
-    iterationCount: _currentIterationCount
-  };
-}).commit();
-const comprehensiveResearchWorkflow = createWorkflow({
-  id: "comprehensive-research-workflow",
-  inputSchema: z.object({}),
-  outputSchema: z.object({
-    finalReport: z.string(),
-    approved: z.boolean()
-  }),
-  steps: [
-    getUserQueryStep,
-    iterativeResearchLoopWorkflow,
-    consolidateResearchDataStep,
-    processAndRetrieveStep,
-    synthesizeFinalContentStep,
-    generateFinalReportStep,
-    reportApprovalStep
-  ]
-});
-comprehensiveResearchWorkflow.then(getUserQueryStep).dowhile(
-  iterativeResearchLoopWorkflow,
-  async ({ inputData }) => {
-    const MAX_ITERATIONS = 7;
-    const hasNewFollowUpQuestions = Array.isArray(inputData.newFollowUpQuestions) && inputData.newFollowUpQuestions.length > 0;
-    const notMaxIterations = inputData.iterationCount < MAX_ITERATIONS;
-    logger$d.debug(`Loop condition check: hasNewFollowUpQuestions=${hasNewFollowUpQuestions}, notMaxIterations=${notMaxIterations}`);
-    return hasNewFollowUpQuestions && notMaxIterations;
-  }
-).map(async ({ getStepResult }) => {
-  const overallLearnings = getStepResult(iterativeResearchLoopWorkflow).allLearnings;
-  const overallRelevantContent = getStepResult(iterativeResearchLoopWorkflow).allRelevantContent;
-  const originalQuery = getStepResult(getUserQueryStep).query;
-  return {
-    allLearnings: overallLearnings,
-    allRelevantContent: overallRelevantContent,
-    originalQuery
-  };
-}).then(consolidateResearchDataStep).map(async ({ inputData }) => {
-  const { consolidatedText, originalQuery } = inputData;
-  return {
-    consolidatedText,
-    originalQuery
-  };
-}).then(processAndRetrieveStep).map(async ({ inputData, getStepResult }) => {
-  const { refinedContext } = inputData;
-  const originalQuery = getStepResult(getUserQueryStep).query;
-  return {
-    refinedContext,
-    originalQuery
-  };
-}).then(synthesizeFinalContentStep).map(async ({ inputData, getStepResult }) => {
-  const { finalSynthesizedContent } = inputData;
-  const originalQuery = getStepResult(getUserQueryStep).query;
-  return {
-    finalSynthesizedContent,
-    originalQuery
-  };
-}).then(generateFinalReportStep).map(async ({ inputData }) => {
-  const { report } = inputData;
-  return {
-    report
-  };
-}).then(reportApprovalStep).commit();
-
-const logger$c = new PinoLogger({
-  level: "info"
-});
-logger$c.info("Initializing OpenRouter Assistant Agent...");
-const openrouter = createOpenRouter({
-  apiKey: process.env.OPENROUTER_API_KEY
-});
-const assistant = new Agent({
-  id: "assistant",
-  name: "assistant",
-  description: "A helpful assistant.",
-  instructions: `You are a helpful assistant. Today is ${(/* @__PURE__ */ new Date()).toISOString()}. Please provide a concise and accurate response.
-    Your goal is to help the user with their research tasks or anything else they need.
-    `,
-  model: openrouter(
-    "openrouter/sonoma-sky-alpha",
-    {
-      extraBody: {
-        reasoning: {
-          max_tokens: 6144
-        }
-      }
-    }
-  ),
-  // memory: memory, // Using LibSQL memory instead of PostgreSQL
-  evals: {
-    contentSimilarity: new ContentSimilarityMetric({ ignoreCase: true, ignoreWhitespace: true }),
-    completeness: new CompletenessMetric(),
-    textualDifference: new TextualDifferenceMetric(),
-    keywordCoverage: new KeywordCoverageMetric(),
-    // Keywords will be provided at runtime for evaluation
-    toneConsistency: new ToneConsistencyMetric()
-  },
-  tools: {
-    // Corrected indentation for the 'tools' object
-    readDataFileTool,
-    writeDataFileTool,
-    deleteDataFileTool,
-    listDataDirTool,
-    evaluateResultTool,
-    extractLearningsTool,
-    batchWebScraperTool,
-    siteMapExtractorTool,
-    linkExtractorTool,
-    htmlToMarkdownTool,
-    contentCleanerTool,
-    //vectorQueryTool,
-    //chunkerTool,
-    //graphRAGUpsertTool,
-    //graphRAGTool,
-    //graphRAGQueryTool,
-    //rerankTool,
-    //weatherTool,
-    webScraperTool
-    //webSearchTool,
-  },
-  inputProcessors: [
-    new UnicodeNormalizer({
-      stripControlChars: true,
-      collapseWhitespace: true,
-      preserveEmojis: true,
-      trim: true
-    })
-  ],
-  outputProcessors: [
-    new BatchPartsProcessor({
-      batchSize: 10,
-      // Maximum parts to batch together
-      maxWaitTime: 50,
-      // Maximum time to wait before emitting (ms)
-      emitOnNonText: true
-      // Emit immediately on non-text parts
-    })
-  ]
-});
-logger$c.info("OpenRouter Assistant Agent Working...");
-
-const logger$b = new PinoLogger({ level: "info" });
-logger$b.info("Complex Research Network initialized");
-const memory$7 = createResearchMemory();
-const complexResearchNetwork = new NewAgentNetwork({
-  id: "complex-research-network",
-  name: "Complex Research Network",
-  instructions: `You are an advanced research and reporting network. Your goal is to thoroughly understand and respond to user queries by leveraging specialized agents and workflows.
-
-  **Capabilities:**
-  - **Information Retrieval (RAG Agent)**: Use the 'ragAgent' to perform vector-based searches and retrieve relevant information from a knowledge base.
-  - **In-depth Research (Research Agent)**: Use the 'researchAgent' to conduct multi-phase web research, including initial and follow-up searches, and extract key learnings.
-  - **Report Generation (Report Agent)**: Use the 'reportAgent' to synthesize research data into comprehensive, well-structured reports.
-  - **Automated Research Workflow**: Use 'researchWorkflow' to guide users through a structured research process, including query definition and approval.
-  - **Automated Report Generation Workflow**: Use 'generateReportWorkflow' to manage the end-to-end process of researching and generating a report, including user approval steps.
-
-  **Decision-Making Guidelines:**
-  - When the user asks for a specific search or retrieval from existing knowledge, prioritize 'ragAgent'.
-  - When the user asks for in-depth investigation or web-based research, consider 'researchAgent' or 'researchWorkflow'. Use 'researchWorkflow' if the task requires user interaction (e.g., approval of research scope).
-  - When the user asks for a comprehensive document or summary based on provided or gathered information, prioritize 'reportAgent' or 'generateReportWorkflow'. Use 'generateReportWorkflow' for a full end-to-end report creation process with potential user approvals.
-  - Always aim to provide the most complete and accurate response possible by combining the strengths of your specialized components.
-  - If a task involves multiple stages (e.g., research then report), consider which workflow (e.g., 'generateReportWorkflow') can handle the entire sequence.
-  `,
-  model: google$2("gemini-2.5-flash-lite"),
-  agents: {
-    ragAgent,
-    researchAgent,
-    reportAgent,
-    assistant
-  },
-  workflows: {
-    researchWorkflow,
-    generateReportWorkflow
-  },
-  memory: memory$7
-});
-
-const logger$a = new PinoLogger({ level: "info" });
-logger$a.info("Initializing GitHub Agent...");
-const memory$6 = createResearchMemory();
-const githubAgent = new Agent$1({
-  id: "github-agent",
-  name: "GitHub Agent",
-  description: "An advanced AI-powered GitHub Assistant designed to streamline and enhance user interactions with GitHub repositories and resources.",
-  instructions: `You are an advanced AI-powered GitHub Assistant, meticulously designed to streamline and enhance user interactions with GitHub repositories and associated resources. Your primary role is to act as an intelligent interface, interpreting user commands, executing actions via the GitHub API, and providing comprehensive, actionable feedback. You manage various GitHub entities including repositories, issues, pull requests, users, and organizations.
-
-**Core Capabilities:**
-- **GitHub API Interaction:** You are equipped with a suite of specialized tools that directly interface with the GitHub API, enabling you to perform a wide range of operations.
-- **Issue Management:** Create, retrieve, update, list, and manage comments on issues within repositories.
-- **Repository Management:** List, create, retrieve, update, delete, and manage settings for repositories.
-- **Pull Request Management:** List, retrieve, create, update, merge, close, and manage comments and reviews on pull requests.
-- **User Management:** Retrieve information about the authenticated user, search for users by username, and list users within an organization or globally (where applicable and permitted).
-- **Organization Management:** Retrieve organization details, list organizations, and list members of an organization.
-
-**Behavioral Guidelines:**
-- **Clarity and Conciseness:** Ensure all responses are easy to understand, directly address the user's query, and avoid unnecessary jargon.
-- **Accuracy and Reliability:** Provide precise information based on real-time API responses and ensure all actions are executed correctly.
-- **Helpfulness and Proactive Guidance:** Anticipate user needs, proactively offer relevant suggestions, clarifications, or next steps, and guide users effectively through complex operations.
-- **Professionalism:** Maintain a polite, respectful, and professional tone in all interactions.
-- **Robust Error Handling:** Gracefully handle API errors, invalid requests, or unexpected situations. When an error occurs, clearly explain the issue, suggest potential causes, and provide actionable next steps or alternative solutions to the user.
-
-**Constraints & Boundaries:**
-- **API-Centric Operations:** Strictly operate within the confines of the provided GitHub API tools. Never attempt to bypass API limitations, security protocols, or perform actions outside the scope of the API.
-- **User Confirmation for Destructive Actions:** Do not perform any destructive or irreversible actions (e.g., deleting a repository, merging a pull request) without explicit, unambiguous user confirmation.
-- **Rate Limit Adherence:** Strictly adhere to GitHub's API rate limits and usage policies to ensure service stability and prevent abuse.
-- **Security and Privacy:** Handle all user data and GitHub resource information with the utmost confidentiality and security. Do not expose sensitive information or perform unauthorized data access.
-- **Scope Limitation:** Do not engage in activities outside of GitHub resource management.
-
-**Success Criteria:**
-- **Efficient and Accurate Fulfillment:** User requests are fulfilled accurately, efficiently, and reliably, leading to successful task completion.
-- **Exceptional User Experience:** Responses are consistently clear, helpful, and timely, minimizing user frustration and maximizing productivity.
-- **Effective Error Resolution:** Errors are handled professionally and informatively, guiding users towards resolution and maintaining a positive interaction.
-- **Operational Compliance:** All operations strictly adhere to GitHub's policies and API best practices.
-
----
-
-**GitHub Copilot Agent Interaction:**
-You possess the advanced capability to delegate tasks and request analysis from GitHub's native Copilot agent. This is a powerful feature for automating complex coding and review tasks. Your interaction with the Copilot agent is governed by two distinct mechanisms:
-
-1.  **Task Delegation via Issue Assignment:**
-    *   **Trigger:** Assigning a GitHub Issue to the user \`@github-copilot\`.
-    *   **Purpose:** To delegate a complete coding task, such as a feature implementation, bug fix, or code refactoring.
-    *   **Action:** When a user asks you to have Copilot build a feature, your tool must first create a highly detailed issue. The body of this issue serves as the primary prompt for the Copilot agent. Immediately after creation, your tool will assign this issue to \`@github-copilot\`.
-    *   **Outcome:** The Copilot agent will accept the task, create a new branch, write the code, and submit a new pull request linked to the original issue. You should inform the user that the task has been successfully delegated and a PR will be generated shortly.
-
-2.  **Code Analysis via Pull Request Comments:**
-    *   **Trigger:** Mentioning the user \`@github-copilot\` in a comment on a pull request.
-    *   **Purpose:** To request analysis, explanation, or suggestions on the code within that specific pull request. This is for review and understanding, not for writing new code.
-    *   **Action:** When a user asks for Copilot's opinion on a PR, your tool will create a comment on that PR, starting with \`@github-copilot\` followed by the user's question.
-    *   **Outcome:** The Copilot agent will post a reply to the comment thread with its analysis or answer.
-
-**Prerequisites & Constraints for Copilot Interaction:**
-- **Copilot Enterprise Required:** These features will only function in repositories that are part of an organization with an active GitHub Copilot Enterprise subscription. If an action fails, you should suggest this as a potential cause.
-- **Clarity is Paramount:** The quality of the Copilot agent's work is directly proportional to the quality of your issue description or comment. Always create detailed, specific, and unambiguous prompts for the Copilot agent.
-`,
-  model: google$2("gemini-2.5-flash"),
-  tools: {
-    //   listWorkflowRuns,
-    searchCode,
-    searchIssuesAndPullRequests,
-    searchRepositories,
-    searchUsers,
-    listPullRequests,
-    getPullRequest,
-    createPullRequest,
-    updatePullRequest,
-    mergePullRequest,
-    listPullRequestComments,
-    createPullRequestComment,
-    updatePullRequestComment,
-    deletePullRequestComment,
-    listPullRequestReviews,
-    createPullRequestReview
-  },
-  evals: {
-    contentSimilarity: new ContentSimilarityMetric({ ignoreCase: true, ignoreWhitespace: true }),
-    completeness: new CompletenessMetric(),
-    textualDifference: new TextualDifferenceMetric(),
-    keywordCoverage: new KeywordCoverageMetric(),
-    // Keywords will be provided at runtime for evaluation
-    toneConsistency: new ToneConsistencyMetric()
-  },
-  memory: memory$6
-});
-logger$a.info("GitHub Agent initialized successfully");
-
-const logger$9 = new PinoLogger({ level: "info" });
-logger$9.info("Initializing Monitor Agent...");
-const memory$5 = createResearchMemory();
-const monitorAgent = new Agent({
-  id: "monitor-agent",
-  name: "Monitor Agent",
-  description: "An expert monitoring and observability specialist focused on proactive system health management.",
-  instructions: `You are an expert monitoring and observability specialist focused on proactive system health management. Your primary role is to monitor system performance, detect anomalies, and ensure operational stability through comprehensive data analysis and alerting.
-
-**Core Purpose:**
-- Monitor system health, performance metrics, and operational status
-- Track application performance and identify bottlenecks
-- Analyze error rates and exception patterns
-- Perform log analysis and correlation
-- Coordinate health checks across systems
-- Identify performance bottlenecks and optimization opportunities
-
-**Key Capabilities:**
-- **System Resource Monitoring:** Track CPU usage, memory consumption, disk utilization, and network I/O
-- **Application Performance Tracking:** Monitor response times, throughput, error rates, and user experience metrics
-- **Error Analysis:** Identify patterns in error logs, exceptions, and failure modes
-- **Log Analysis:** Parse, correlate, and analyze log files for insights and anomalies
-- **Health Check Coordination:** Run automated health checks and aggregate results
-- **Performance Bottleneck Identification:** Analyze metrics to identify slow queries, memory leaks, and resource constraints
-- **Alert Management:** Generate alerts based on thresholds and anomaly detection
-- **Trend Analysis:** Identify performance trends and capacity planning needs
-
-**Behavioral Guidelines:**
-- **Proactive Monitoring:** Continuously monitor systems and proactively identify potential issues before they become critical
-- **Data-Driven Analysis:** Base all conclusions on actual metrics, logs, and performance data
-- **Comprehensive Coverage:** Monitor all aspects of system health including infrastructure, applications, and user experience
-- **Alert Prioritization:** Focus on critical issues first, then performance degradation, then optimization opportunities
-- **Clear Communication:** Provide detailed, actionable insights with specific recommendations
-- **Historical Context:** Consider trends and historical data when analyzing current performance
-- **Root Cause Analysis:** Dig deep to identify underlying causes rather than just symptoms
-
-**Constraints & Boundaries:**
-- **Data Integrity:** Only analyze data from verified sources and maintain data security
-- **Resource Awareness:** Be mindful of monitoring overhead and avoid impacting system performance
-- **Scope Limitation:** Focus on monitoring and analysis, not direct system administration
-- **Ethical Monitoring:** Respect privacy and security when analyzing logs and metrics
-- **Threshold Management:** Use appropriate thresholds that balance sensitivity with false positive reduction
-
-**Success Criteria:**
-- **Early Detection:** Identify issues before they impact users or business operations
-- **Accurate Analysis:** Provide correct root cause analysis and actionable recommendations
-- **Comprehensive Coverage:** Monitor all critical system components and performance indicators
-- **Timely Response:** Generate alerts and insights within appropriate timeframes
-- **Actionable Insights:** Provide specific, implementable recommendations for issues found
-
-**Monitoring Process:**
-1. **Data Collection:** Gather metrics, logs, and performance data from all monitored systems
-2. **Analysis Phase:** Analyze collected data for anomalies, trends, and potential issues
-3. **Correlation:** Correlate events across different systems and components
-4. **Alert Generation:** Generate appropriate alerts based on severity and impact
-5. **Reporting:** Provide comprehensive reports with insights and recommendations
-6. **Trend Tracking:** Maintain historical data for trend analysis and capacity planning
-
-**Tool Usage Guidelines:**
-- Use data-file-manager tools to store and retrieve monitoring data and logs
-- Use web-scraper-tool to collect external monitoring data and status pages
-- Use evaluateResultTool to assess the quality and relevance of monitoring data
-- Use extractLearningsTool to identify patterns and insights from log analysis
-- Store all monitoring results and analysis in the data directory for historical tracking
-
-Always maintain detailed logs of your monitoring activities and analysis for audit and improvement purposes.`,
-  evals: {
-    contentSimilarity: new ContentSimilarityMetric({ ignoreCase: true, ignoreWhitespace: true }),
-    completeness: new CompletenessMetric(),
-    textualDifference: new TextualDifferenceMetric(),
-    keywordCoverage: new KeywordCoverageMetric(),
-    // Keywords will be provided at runtime for evaluation
-    toneConsistency: new ToneConsistencyMetric()
-  },
-  model: google$2("gemini-2.5-flash-lite"),
-  tools: {
-    readDataFileTool,
-    writeDataFileTool,
-    listDataDirTool,
-    searchDataFilesTool,
-    getDataFileInfoTool,
-    webScraperTool,
-    evaluateResultTool,
-    extractLearningsTool
-  },
-  memory: memory$5
-});
-logger$9.info("Monitor Agent initialized successfully");
-
-const logger$8 = new PinoLogger({ level: "info" });
-logger$8.info("Initializing Planning Agent...");
-const memory$4 = createResearchMemory();
-const planningAgent = new Agent({
-  id: "planning-agent",
-  name: "Planning Agent",
-  description: "An expert strategic planning and project management specialist focused on comprehensive project coordination and workflow optimization.",
-  instructions: `You are an expert strategic planning and project management specialist focused on comprehensive project coordination and workflow optimization. Your primary role is to create detailed project plans, manage resources effectively, and ensure successful project execution through systematic planning and monitoring.
-
-**Core Purpose:**
-- Strategic planning and roadmap development for complex projects
-- Project coordination and workflow optimization
-- Resource allocation and scheduling management
-- Risk assessment and mitigation planning
-- Progress tracking and milestone management
-- Task breakdown and prioritization
-
-**Key Capabilities:**
-- **Project Planning:** Create comprehensive project plans with timelines, milestones, and deliverables
-- **Task Breakdown:** Decompose complex projects into manageable tasks with dependencies
-- **Resource Allocation:** Optimize resource distribution across tasks and team members
-- **Risk Management:** Identify potential risks and develop mitigation strategies
-- **Progress Tracking:** Monitor project progress against milestones and adjust plans as needed
-- **Workflow Optimization:** Streamline processes and identify efficiency improvements
-- **Schedule Management:** Create realistic timelines and manage project schedules
-- **Stakeholder Coordination:** Manage communication and expectations across project stakeholders
-
-**Behavioral Guidelines:**
-- **Systematic Approach:** Follow structured planning methodologies and maintain comprehensive documentation
-- **Data-Driven Planning:** Base all plans on thorough research and analysis of requirements
-- **Risk-Aware Planning:** Proactively identify and mitigate potential project risks
-- **Resource Optimization:** Maximize efficiency while ensuring quality and timeline adherence
-- **Clear Communication:** Provide detailed, actionable plans with clear milestones and deliverables
-- **Adaptive Planning:** Regularly review and adjust plans based on new information and changing conditions
-- **Stakeholder Focus:** Consider all stakeholder needs and maintain clear communication channels
-
-**Constraints & Boundaries:**
-- **Scope Management:** Clearly define project scope and avoid scope creep
-- **Resource Limits:** Work within defined resource constraints and budget limitations
-- **Timeline Realism:** Create achievable timelines based on available resources and complexity
-- **Quality Standards:** Maintain high quality standards while optimizing for efficiency
-- **Documentation:** Maintain comprehensive records of all planning decisions and changes
-- **Ethical Planning:** Ensure all plans comply with organizational policies and ethical standards
-
-**Success Criteria:**
-- **Comprehensive Planning:** Create detailed, actionable project plans covering all aspects
-- **Risk Mitigation:** Identify and address potential risks before they impact the project
-- **Resource Efficiency:** Optimize resource utilization while meeting project objectives
-- **Timeline Adherence:** Deliver projects on time through effective planning and monitoring
-- **Stakeholder Satisfaction:** Meet or exceed stakeholder expectations through clear communication
-- **Process Improvement:** Continuously identify and implement workflow optimizations
-
-**Planning Process:**
-1. **Requirements Analysis:** Gather and analyze all project requirements and constraints
-2. **Scope Definition:** Clearly define project scope, objectives, and deliverables
-3. **Task Breakdown:** Decompose project into manageable tasks with dependencies
-4. **Resource Planning:** Identify required resources and create allocation plans
-5. **Schedule Development:** Create realistic timelines with milestones and critical paths
-6. **Risk Assessment:** Identify potential risks and develop mitigation strategies
-7. **Plan Documentation:** Create comprehensive project plans and documentation
-8. **Progress Monitoring:** Track progress and adjust plans as needed
-9. **Optimization:** Continuously identify and implement process improvements
-
-**Tool Usage Guidelines:**
-- Use data-file-manager tools to store and retrieve project plans, schedules, and documentation
-- Use web-scraper-tool to collect research data and industry best practices for planning
-- Use webSearchTool to research planning methodologies and gather relevant information
-- Use evaluateResultTool to assess the quality and feasibility of planning approaches
-- Use extractLearningsTool to identify best practices and lessons from previous projects
-- Store all planning documents in organized directories within the data folder
-- Maintain version control of plans and track changes over time
-
-**Output Structure:**
-Return planning results in structured JSON format with:
-- projectOverview: High-level project summary and objectives
-- taskBreakdown: Detailed task list with dependencies and estimates
-- resourcePlan: Resource allocation and scheduling information
-- riskAssessment: Identified risks and mitigation strategies
-- timeline: Project timeline with milestones and critical paths
-- progressMetrics: Key performance indicators and tracking methods
-- recommendations: Actionable recommendations for successful execution
-
-Always maintain detailed records of your planning activities and decisions for audit and improvement purposes.`,
-  evals: {
-    contentSimilarity: new ContentSimilarityMetric({ ignoreCase: true, ignoreWhitespace: true }),
-    completeness: new CompletenessMetric(),
-    textualDifference: new TextualDifferenceMetric(),
-    keywordCoverage: new KeywordCoverageMetric(),
-    // Keywords will be provided at runtime for evaluation
-    toneConsistency: new ToneConsistencyMetric()
-  },
-  model: google$2("gemini-2.5-flash-lite"),
-  tools: {
-    readDataFileTool,
-    writeDataFileTool,
-    listDataDirTool,
-    searchDataFilesTool,
-    getDataFileInfoTool,
-    webScraperTool,
-    webSearchTool,
-    evaluateResultTool,
-    extractLearningsTool
-  },
-  memory: memory$4
-});
-logger$8.info("Planning Agent initialized successfully");
-
-const logger$7 = new PinoLogger({ level: "info" });
-logger$7.info("Initializing Quality Assurance Agent...");
-const memory$3 = createResearchMemory();
-const qualityAssuranceAgent = new Agent({
-  id: "quality-assurance-agent",
-  name: "Quality Assurance Agent",
-  description: "An agent specialized in quality assurance and testing for software projects.",
-  instructions: `You are an expert quality assurance and testing specialist focused on comprehensive software quality management and defect prevention. Your primary role is to ensure software quality through systematic testing, quality metrics tracking, and continuous improvement processes.
-
-**Core Purpose:**
-- Quality assurance coordination and testing strategy development
-- Automated and manual testing orchestration
-- Quality metrics collection and analysis
-- Defect analysis and root cause identification
-- Code review and standards enforcement
-- Quality process optimization and continuous improvement
-
-**Key Capabilities:**
-- **Test Planning & Strategy:** Create comprehensive test plans, define test cases, and establish testing methodologies
-- **Automated Testing Coordination:** Manage automated test suites, CI/CD integration, and test automation frameworks
-- **Manual Testing Coordination:** Organize manual testing efforts, user acceptance testing, and exploratory testing
-- **Quality Metrics Tracking:** Monitor KPIs like defect density, test coverage, mean time to detect/resolve defects
-- **Defect Analysis:** Perform root cause analysis, defect pattern identification, and trend analysis
-- **Code Review:** Conduct thorough code reviews, enforce coding standards, and identify quality issues
-- **Quality Process Optimization:** Continuously improve testing processes, tools, and methodologies
-- **Risk Assessment:** Identify quality risks and prioritize testing efforts based on impact and likelihood
-
-**Behavioral Guidelines:**
-- **Comprehensive Coverage:** Ensure all aspects of software quality are addressed through systematic testing approaches
-- **Data-Driven Analysis:** Base all quality decisions on metrics, test results, and empirical evidence
-- **Proactive Quality Management:** Focus on defect prevention rather than just detection
-- **Standards Compliance:** Enforce coding standards, testing best practices, and quality requirements
-- **Clear Communication:** Provide detailed, actionable quality reports with specific recommendations
-- **Risk-Based Testing:** Prioritize testing efforts based on business impact and defect likelihood
-- **Continuous Improvement:** Regularly assess and improve quality processes and methodologies
-
-**Constraints & Boundaries:**
-- **Quality Standards:** Maintain high quality standards while balancing speed and cost considerations
-- **Resource Awareness:** Be mindful of testing resource requirements and optimize test efficiency
-- **Scope Management:** Focus on quality assurance and testing, not direct development or deployment
-- **Ethical Testing:** Respect data privacy, security requirements, and legal compliance in testing
-- **Tool Integration:** Work within the provided tool ecosystem for quality management
-
-**Success Criteria:**
-- **Defect Prevention:** Identify and prevent defects before they reach production
-- **Comprehensive Testing:** Achieve adequate test coverage across all critical functionality
-- **Quality Metrics:** Maintain quality metrics within acceptable thresholds
-- **Timely Delivery:** Complete quality assurance activities within project timelines
-- **Actionable Insights:** Provide specific, implementable recommendations for quality improvements
-- **Process Efficiency:** Continuously optimize testing processes and reduce time-to-quality
-
-**Quality Assurance Process:**
-1. **Planning Phase:** Define quality requirements, create test plans, and establish quality metrics
-2. **Test Design:** Develop test cases, test scripts, and test data based on requirements
-3. **Test Execution:** Coordinate automated and manual testing across different environments
-4. **Defect Management:** Track, analyze, and resolve defects with root cause analysis
-5. **Quality Analysis:** Review test results, analyze quality metrics, and identify trends
-6. **Reporting:** Generate comprehensive quality reports with insights and recommendations
-7. **Process Improvement:** Assess current processes and implement quality improvements
-
-**Tool Usage Guidelines:**
-- Use data-file-manager tools to store test plans, test results, quality metrics, and defect reports
-- Use web-scraper-tool to collect testing resources, industry standards, and quality best practices
-- Use evaluateResultTool to assess the quality and relevance of testing approaches and results
-- Use extractLearningsTool to identify patterns in defects and quality issues
-- Store all quality assurance artifacts in organized directories within the data folder
-- Maintain version control of test plans, test cases, and quality documentation
-
-**Output Structure:**
-Return quality assurance results in structured JSON format with:
-- qualityOverview: High-level quality assessment and current status
-- testCoverage: Test coverage metrics and gap analysis
-- defectAnalysis: Defect trends, root causes, and prevention recommendations
-- qualityMetrics: Key quality indicators and performance measurements
-- testResults: Summary of test execution results and findings
-- recommendations: Actionable recommendations for quality improvements
-- riskAssessment: Quality risks and mitigation strategies
-
-Always maintain detailed logs of your quality assurance activities and analysis for audit and improvement purposes.`,
-  evals: {
-    contentSimilarity: new ContentSimilarityMetric({ ignoreCase: true, ignoreWhitespace: true }),
-    completeness: new CompletenessMetric(),
-    textualDifference: new TextualDifferenceMetric(),
-    keywordCoverage: new KeywordCoverageMetric(),
-    // Keywords will be provided at runtime for evaluation
-    toneConsistency: new ToneConsistencyMetric()
-  },
-  model: google$2("gemini-2.5-flash-lite"),
-  memory: memory$3
-});
-logger$7.info("Quality Assurance Agent initialized successfully");
-
-const logger$6 = new PinoLogger({ level: "info" });
-const getProjectDetailsStep = createStep({
-  id: "get-project-details",
-  inputSchema: z.object({}),
-  outputSchema: z.object({
-    projectName: z.string(),
-    repositoryUrl: z.string()
-  }),
-  resumeSchema: z.object({
-    projectName: z.string(),
-    repositoryUrl: z.string()
-  }),
-  suspendSchema: z.object({
-    message: z.object({
-      projectName: z.string(),
-      repositoryUrl: z.string()
-    })
-  }),
-  execute: async ({ resumeData, suspend }) => {
-    if (resumeData) {
-      return {
-        ...resumeData,
-        projectName: resumeData.projectName || "",
-        repositoryUrl: resumeData.repositoryUrl || ""
-      };
-    }
-    await suspend({
-      message: {
-        projectName: "Enter the GitHub project name",
-        repositoryUrl: "Enter the GitHub repository URL"
-      }
-    });
-    return {
-      projectName: "",
-      repositoryUrl: ""
-    };
-  }
-});
-const createProjectPlanStep = createStep({
-  id: "create-project-plan",
-  inputSchema: z.object({
-    projectName: z.string(),
-    repositoryUrl: z.string()
-  }),
-  outputSchema: z.object({
-    plan: z.string()
-  }),
-  execute: async ({ inputData }) => {
-    const { projectName, repositoryUrl } = inputData;
-    try {
-      const result = await planningAgent.generate([
-        {
-          role: "user",
-          content: `Create a detailed project plan for GitHub repository: ${repositoryUrl}
-          Project: ${projectName}
-
-          Include timeline, milestones, and resource requirements.`
-        }
-      ]);
-      return { plan: result.text };
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      logger$6.error("Error creating project plan", { error: message });
-      return { plan: `Error: ${message}` };
-    }
-  }
-});
-const monitorRepositoryStep = createStep({
-  id: "monitor-repository",
-  inputSchema: z.object({
-    repositoryUrl: z.string(),
-    plan: z.string()
-  }),
-  outputSchema: z.object({
-    monitoringReport: z.string()
-  }),
-  execute: async ({ inputData }) => {
-    const { repositoryUrl, plan } = inputData;
-    try {
-      const result = await monitorAgent.generate([
-        {
-          role: "user",
-          content: `Monitor the GitHub repository: ${repositoryUrl}
-          Project Plan: ${plan}
-
-          Provide health status, activity metrics, and progress tracking.`
-        }
-      ]);
-      return { monitoringReport: result.text };
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      logger$6.error("Error monitoring repository", { error: message });
-      return { monitoringReport: `Error: ${message}` };
-    }
-  }
-});
-const generateGithubTasksStep = createStep({
-  id: "generate-github-tasks",
-  inputSchema: z.object({
-    plan: z.string(),
-    monitoringReport: z.string()
-  }),
-  outputSchema: z.object({
-    tasks: z.string()
-  }),
-  execute: async ({ inputData }) => {
-    const { plan, monitoringReport } = inputData;
-    try {
-      const result = await githubAgent.generate([
-        {
-          role: "user",
-          content: `Based on the project plan and monitoring report, suggest GitHub tasks to create:
-
-          Plan: ${plan}
-          Monitoring: ${monitoringReport}
-
-          Suggest issues, milestones, and project board items.`
-        }
-      ]);
-      return { tasks: result.text };
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      logger$6.error("Error generating GitHub tasks", { error: message });
-      return { tasks: `Error: ${message}` };
-    }
-  }
-});
-const githubPlanningWorkflow = createWorkflow({
-  id: "github-planning-workflow",
-  inputSchema: z.object({}),
-  outputSchema: z.object({
-    plan: z.string(),
-    monitoringReport: z.string(),
-    tasks: z.string()
-  }),
-  steps: [getProjectDetailsStep, createProjectPlanStep, monitorRepositoryStep, generateGithubTasksStep]
-});
-githubPlanningWorkflow.then(getProjectDetailsStep).then(createProjectPlanStep).then(monitorRepositoryStep).then(generateGithubTasksStep).commit();
-
-const logger$5 = new PinoLogger({ level: "info" });
-const processPlanningResultsStep = createStep({
-  id: "process-planning-results",
-  inputSchema: z.object({
-    plan: z.string(),
-    monitoringReport: z.string(),
-    tasks: z.string()
-  }),
-  outputSchema: z.object({
-    qaAnalysis: z.string(),
-    completed: z.boolean()
-  }),
-  execute: async ({ inputData }) => {
-    const { plan, monitoringReport, tasks } = inputData;
-    try {
-      const result = await qualityAssuranceAgent.generate([
-        {
-          role: "user",
-          content: `Perform quality assurance analysis on this GitHub project planning:
-
-          Project Plan: ${plan}
-          Monitoring Report: ${monitoringReport}
-          Generated Tasks: ${tasks}
-
-          Assess quality, identify risks, and provide recommendations.`
-        }
-      ]);
-      return { qaAnalysis: result.text, completed: true };
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      logger$5.error("Error in QA analysis", { error: message });
-      return { qaAnalysis: `Error: ${message}`, completed: false };
-    }
-  }
-});
-const githubQualityWorkflow = createWorkflow({
-  id: "github-quality-workflow",
-  steps: [githubPlanningWorkflow, processPlanningResultsStep],
-  inputSchema: z.object({}),
-  outputSchema: z.object({
-    plan: z.string(),
-    monitoringReport: z.string(),
-    tasks: z.string(),
-    qaAnalysis: z.string(),
-    completed: z.boolean()
-  })
-});
-githubQualityWorkflow.then(githubPlanningWorkflow).then(processPlanningResultsStep).commit();
-
-const logger$4 = new PinoLogger({ level: "info" });
-logger$4.info("Initializing Publisher Agent...");
-const memory$2 = createResearchMemory();
-const publisherAgent = new Agent({
-  id: "publisher-agent",
-  name: "publisherAgent",
-  description: "An agent that publishes blog posts by writing and editing content.",
-  instructions: "You are a publisher agent that first calls the copywriter agent to write blog post copy about a specific topic and then calls the editor agent to edit the copy. Just return the final edited copy.",
-  model: google$2("gemini-2.5-flash"),
-  tools: {
-    copywriterTool,
-    editorTool,
-    webSearchTool,
-    evaluateResultTool,
-    extractLearningsTool,
-    "web-scraper": webScraperTool,
-    batchWebScraperTool,
-    siteMapExtractorTool,
-    linkExtractorTool,
-    htmlToMarkdownTool,
-    contentCleanerTool
-  },
-  memory: memory$2
-});
-logger$4.info("Publish Agent is working!");
-
-const logger$3 = new PinoLogger({ level: "info" });
-logger$3.info("Initializing Copywriter Agent...");
-const memory$1 = createResearchMemory();
-const queryTool = createVectorQueryTool({
-  vectorStoreName: "libsql",
-  indexName: STORAGE_CONFIG.VECTOR_INDEXES.RESEARCH_DOCUMENTS,
-  // Use research documents index
-  model: google$2.textEmbedding("gemini-embedding-001"),
-  enableFilter: true,
-  description: "Search for semantically similar content in the LibSQL vector store using embeddings. Supports filtering, ranking, and context retrieval."
-});
-const copywriterAgent = new Agent({
-  id: "copywriter-agent",
-  name: "copywriter-agent",
-  description: "An expert copywriter agent that writes engaging and high-quality blog post content on specified topics.",
-  instructions: `You are a copywriter agent that writes blog post copy. Today is ${(/* @__PURE__ */ new Date()).toISOString()}. Please provide a concise and accurate response. Your goal is to write a blog post & similar tasks.
-    - The blog post should be well-structured, informative, and engaging.
-    - Use the provided tools to gather information and ensure factual accuracy.
-    - Ensure the content is original and free from plagiarism.
-    - Write in a clear, concise, and engaging style.
-    - Maintain a consistent tone and voice throughout the content.
-
-    Process queries using the provided context. Structure responses to be concise and relevant.
-  ${LIBSQL_PROMPT}
-  `,
-  model: google$2("gemini-2.5-flash"),
-  memory: memory$1,
-  tools: {
-    webScraperTool,
-    queryTool,
-    //    batchWebScraperTool,
-    //   siteMapExtractorTool,
-    //    linkExtractorTool,
-    htmlToMarkdownTool
-    //    contentCleanerTool
-  }
-});
-
-const logger$2 = new PinoLogger({ level: "info" });
-logger$2.info("Initializing Editor Agent...");
-const memory = createResearchMemory();
-const editorAgent = new Agent({
-  id: "editor-agent",
-  name: "Editor",
-  description: "An editor agent that edits blog post copy to improve clarity, coherence, and overall quality.",
-  instructions: "You are an editor agent that edits blog post copy.",
-  model: google$2("gemini-2.5-flash-lite"),
   memory
 });
 
@@ -1946,27 +656,28 @@ const mastra = new Mastra({
     reportAgent,
     evaluationAgent,
     learningExtractionAgent,
-    webSummarizationAgent,
-    ragAgent,
-    githubAgent,
-    monitorAgent,
-    planningAgent,
-    qualityAssuranceAgent,
-    publisherAgent,
-    copywriterAgent,
-    editorAgent,
-    assistant
+    webSummarizationAgent
+    //  ragAgent,
+    //  githubAgent,
+    //  monitorAgent,
+    //  planningAgent,
+    //  qualityAssuranceAgent,
+    //  publisherAgent,
+    //  copywriterAgent,
+    //  editorAgent,
+    //  assistant,
   },
   workflows: {
-    generateReportWorkflow,
+    // generateReportWorkflow, 
     researchWorkflow,
-    comprehensiveResearchWorkflow,
-    githubPlanningWorkflow,
-    githubQualityWorkflow
+    selfEvolvingResearchWorkflow
+    // comprehensiveResearchWorkflow, 
+    // githubPlanningWorkflow, 
+    // githubQualityWorkflow 
   },
-  vnext_networks: {
-    complexResearchNetwork
-  },
+  //  vnext_networks: {
+  //    complexResearchNetwork,
+  //  },
   telemetry: {
     enabled: false
   },

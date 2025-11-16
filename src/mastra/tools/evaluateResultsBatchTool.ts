@@ -31,8 +31,14 @@ export const evaluateResultsBatchTool = createTool({
     existingUrls: z.array(z.string()).describe('URLs that have already been processed').optional(),
   }),
   outputSchema: z.array(evaluationResultSchema),
-  execute: async ({ context, mastra }) => {
+  execute: async ({ context, mastra, runtimeContext }) => {
     const { query, results, existingUrls = [] } = context;
+    
+    // Access runtime strategy configuration
+    const strategy = runtimeContext as any;
+    const searchDepth = strategy?.searchDepth || 'standard';
+    
+    logger.info('Strategy-aware evaluation:', { searchDepth, resultCount: results.length });
     try {
       // Validate inputs
       if (!query || typeof query !== 'string') {
@@ -112,6 +118,13 @@ export const evaluateResultsBatchTool = createTool({
             setTimeout(() => reject(new Error('Evaluation timeout after 30 seconds')), 30000);
           });
 
+          // Adapt evaluation criteria based on search depth
+          const criteriaNote = searchDepth === 'shallow'
+            ? 'Be selective - only mark highly relevant results.'
+            : searchDepth === 'deep'
+            ? 'Be inclusive - mark potentially relevant results for thorough research.'
+            : 'Apply balanced relevance criteria.';
+
           // Use generateVNext() for V2 models (gemini-2.5-flash-lite) as per Mastra issue #7042
           const generatePromise = evaluationAgent.generateVNext(
             [
@@ -123,6 +136,8 @@ export const evaluateResultsBatchTool = createTool({
         Title: ${result.title}
         URL: ${result.url}
         Content snippet: ${result.content.substring(0, 500)}...
+
+        ${criteriaNote}
 
         Respond with a JSON object containing:
         - isRelevant: boolean indicating if the result is relevant
