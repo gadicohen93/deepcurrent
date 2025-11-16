@@ -181,6 +181,33 @@ export async function calculateEpisodeMetrics(
 }
 
 /**
+ * Update episode status
+ */
+export async function updateEpisodeStatus(
+  episodeId: string,
+  status: string,
+  data?: Partial<{
+    errorMessage: string;
+    resultNoteId: string;
+    sourcesReturned: any[];
+    sourcesSaved: any[];
+    toolUsage: any;
+  }>
+): Promise<Episode> {
+  return prisma.episode.update({
+    where: { id: episodeId },
+    data: {
+      status,
+      errorMessage: data?.errorMessage,
+      resultNoteId: data?.resultNoteId,
+      sourcesReturned: data?.sourcesReturned ? JSON.stringify(data.sourcesReturned) : undefined,
+      sourcesSaved: data?.sourcesSaved ? JSON.stringify(data.sourcesSaved) : undefined,
+      toolUsage: data?.toolUsage ? JSON.stringify(data.toolUsage) : undefined,
+    },
+  });
+}
+
+/**
  * Delete episodes older than a certain date
  */
 export async function deleteOldEpisodes(beforeDate: Date): Promise<number> {
